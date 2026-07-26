@@ -14,7 +14,21 @@ FIRECRAWL_API_KEY = None  # 用MCP firecrawl_scrape抓好的markdown直接貼進
 ETF_CONFIG = [
     {"ticker": "00904", "concept": "半導體", "tier": 1},
     {"ticker": "00947", "concept": "IC設計", "tier": 2},
+    {"ticker": "00962", "concept": "AI", "tier": 2,
+     "note": "台新投信，https://www.tsit.com.tw/ETF/Home/ETFSeriesDetail/00962"},
+    {"ticker": "00901", "concept": "智能車供應鏈", "tier": 2,
+     "note": "永豐投信，表格格式不同(欄位是「證券代碼/證券名稱/股數/佔基金淨資產之權重(%)」)，"
+             "頁面在 https://sitc.sinopac.com/SinopacEtfs/Etfs/Pcf/00901，"
+             "不是ETFSeriesDetail格式，parse_holdings_table()目前只認台新投信的表格格式，"
+             "這筆是手動解析後直接寫入concept_insert.sql，之後要重跑得另外寫parser"},
 ]
+
+# 2026-07-24 有查過但沒找到可用的官方權重來源，先不做，之後有更好的資料源再補：
+# - 資安：台股唯一資安主題ETF是00875國泰網路資安，但成分股是全球資安公司(CrowdStrike等)，
+#   幾乎不含台股，對我們205檔追蹤股票沒有覆蓋率，勉強做只能用非官方的概念股清單(如MoneyDJ/CMoney)，
+#   跟現有「官方ETF權重揭露」的方法論不一致，等於降低整體資料品質，先不做。
+# - 核能/鈾礦：台灣沒有掛牌的核能/鈾礦主題ETF(這是美股/加拿大礦業股的主題，台股裡沒有真正的鈾礦公司)，
+#   概念本身就不太適用在台股205檔追蹤清單上，跳過。
 
 
 def parse_holdings_table(markdown_text):

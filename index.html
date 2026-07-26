@@ -794,10 +794,27 @@ function buildLookups() {
   });
   revisionById = {};
   DATA.revisions.forEach(r => revisionById[r.id] = r);
-  conceptByTicker = {};
+  // 同一檔股票、同一個concept名稱，即使來自不同資料源(ETF主題揭露 vs 官方產業價值鏈平台)、
+  // 或同一來源底下有好幾個細部「位置」(例如台化在「紡織」底下有紡紗/織布/染整等5筆)，
+  // 畫面上都只顯示一次這個concept名稱——不要讓「半導體」這種名字因為兩邊資料源都有記錄
+  // 就重複出現兩次標籤，細部資訊(位置、權重、來源)全部合併到滑鼠移過去的tooltip裡。
+  const conceptGroups = {};
   (DATA.conceptMap || []).forEach(c => {
-    if (!conceptByTicker[c.ticker]) conceptByTicker[c.ticker] = [];
-    conceptByTicker[c.ticker].push(c);
+    const key = `${c.ticker}||${c.concept}`;
+    if (!conceptGroups[key]) {
+      conceptGroups[key] = { ticker: c.ticker, concept: c.concept, hasTheme: false, weight: c.weight, positions: [], sources: new Set() };
+    }
+    const g = conceptGroups[key];
+    if (c.dimension === 'theme') g.hasTheme = true;
+    if (c.weight != null && g.weight == null) g.weight = c.weight;
+    const posMatch = /位置:([^)]+)/.exec(c.source || '');
+    if (posMatch) g.positions.push(posMatch[1]);
+    else if (c.source) g.sources.add(c.source);
+  });
+  conceptByTicker = {};
+  Object.values(conceptGroups).forEach(g => {
+    if (!conceptByTicker[g.ticker]) conceptByTicker[g.ticker] = [];
+    conceptByTicker[g.ticker].push(g);
   });
   unifiedTargetEvents = buildUnifiedTargetSeries();
 }
@@ -1244,7 +1261,12 @@ function renderStockList() {
         <button class="pin-btn${s.pinned ? ' pinned' : ''}" title="${s.pinned ? '取消釘選' : '釘選常用股'}" data-ticker="${s.ticker}">${s.pinned ? '★' : '☆'}</button>
         <div class="id-block"><div class="name">${s.company}</div><div class="ticker mono">${s.ticker}</div></div>
         <div class="industry-tag">${s.industry || ''}</div>
-        <div class="concept-chips">${(conceptByTicker[s.ticker]||[]).map(c => `<span class="concept-chip${c.dimension==='value_chain'?' value-chain':''}" title="${c.dimension==='theme'?'主題曝險':'供應鏈位置'} · 來源:${c.source||''}${c.weight!=null?' · 權重'+c.weight.toFixed(1)+'%':''}">${c.concept}</span>`).join('')}</div>
+        <div class="concept-chips">${(conceptByTicker[s.ticker]||[]).map(c => {
+          const detail = c.positions.length ? `位置:${c.positions.join('、')}` : (c.sources.size ? [...c.sources].join('；') : '');
+          const weightPart = c.weight != null ? ` · 權重${c.weight.toFixed(1)}%` : '';
+          const label = c.hasTheme ? '主題曝險' : '供應鏈位置';
+          return `<span class="concept-chip${c.hasTheme?'':' value-chain'}" title="${label}${detail?' · '+detail:''}${weightPart}">${c.concept}</span>`;
+        }).join('')}</div>
         <div class="spark"></div>
         <div class="counts">
           ${s.upCount ? `<span class="count-chip up">↑${s.upCount}</span>` : ''}
