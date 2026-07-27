@@ -118,7 +118,7 @@ def resolve_execution_date(d: pd.Timestamp, time_taipei, calendar: pd.DatetimeIn
 # 2. 事件表前處理：算出兩種上漲空間、歷史平均(給avg_rule跟異常調升因子用)
 # ----------------------------------------------------------------------------
 
-def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex) -> pd.DataFrame:
+def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex, taiex: Optional[pd.Series] = None) -> pd.DataFrame:
     ev = events[events["direction"] == "UP"].copy()
     ev = ev.sort_values(["ticker", "date"]).reset_index(drop=True)
 
@@ -158,6 +158,74 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
     ev["hist_std_change"] = grp["target_change_pct"].transform(lambda s: s.shift(1).expanding().std())
     ev["streak"] = grp.cumcount()  # 這是第幾次調升(從0開始)，越大代表過去連續調升次數越多
 
+    if taiex is not None:
+        ev = _attach_enhanced_factors(ev, events, stock_price, calendar, taiex)
+
+    return ev
+
+
+def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_price: dict, calendar: pd.DatetimeIndex, taiex: pd.Series) -> pd.DataFrame:
+    """直接對照同事backtest.js的makeEvents()，算出enhanced配置公式要用的輔助欄位：
+    abnormal_revision(異常調升，相對該股過去365天|調升幅度|中位數)、
+    recent_upgrades_60(過去60天內調升次數+1)、momentum_20/relative_momentum_20(進場前
+    21個價格點、頭尾比的動能，相對加權指數)、volatility_20(同一段期間年化波動率)。
+    基準值(abnormal_revision/recent_upgrades_60)用「全部方向」(UP+DOWN)的歷史事件計算，
+    跟同事版本一致；動能/波動率只在UP事件(有entry_date)才算得出來。
+    """
+    all_ev = events_full.copy()
+    all_ev["revision"] = all_ev["target_change_pct"] / 100.0
+    all_ev["publish_ts"] = pd.to_datetime(
+        all_ev["date"].dt.strftime("%Y-%m-%d") + " " + all_ev["news_time_taipei"].fillna("00:00:00")
+    )
+    all_ev = all_ev.sort_values("publish_ts").reset_index(drop=True)
+
+    entry_date_by_key = dict(zip(zip(ev["ticker"], ev["date"]), ev["entry_date"]))
+
+    prior_revisions: dict[str, list] = {}
+    prior_upgrades: dict[str, list] = {}
+    out_rows = {}
+
+    for _, row in all_ev.iterrows():
+        ticker, pub_date = row["ticker"], row["date"]
+        revs = prior_revisions.setdefault(ticker, [])
+        cutoff365 = pub_date - pd.Timedelta(days=365)
+        base_vals = [v for d, v in revs if d < pub_date and d >= cutoff365]
+        base = np.median(base_vals) if base_vals else None
+        abnormal = abs(row["revision"]) / base if base else 1.0
+
+        ups = prior_upgrades.setdefault(ticker, [])
+        cutoff60 = pub_date - pd.Timedelta(days=60)
+        recent_up = 1 + sum(1 for d in ups if d < pub_date and d >= cutoff60)
+
+        entry_date = entry_date_by_key.get((ticker, pub_date))
+        mom = rel_mom = 0.0
+        vol = 0.35
+        if entry_date is not None and entry_date in calendar:
+            pos = calendar.get_loc(entry_date)
+            ser = stock_price.get(ticker)
+            window = ser.iloc[max(0, pos - 21):pos].dropna() if ser is not None else pd.Series(dtype=float)
+            bench_window = taiex.iloc[max(0, pos - 21):pos]
+            if len(window) > 1:
+                mom = window.iloc[-1] / window.iloc[0] - 1
+                rets = window.pct_change(fill_method=None).dropna()
+                if len(rets) > 1:
+                    vol = rets.std() * np.sqrt(252)
+            if len(bench_window) > 1:
+                bench_ret = bench_window.iloc[-1] / bench_window.iloc[0] - 1
+                rel_mom = mom - bench_ret
+
+        out_rows[(ticker, pub_date)] = (abnormal, recent_up, mom, rel_mom, vol)
+
+        revs.append((pub_date, abs(row["revision"])))
+        if row["direction"] == "UP":
+            ups.append(pub_date)
+
+    keys = list(zip(ev["ticker"], ev["date"]))
+    ev["abnormal_revision"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[0] for k in keys]
+    ev["recent_upgrades_60"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[1] for k in keys]
+    ev["momentum_20"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[2] for k in keys]
+    ev["relative_momentum_20"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[3] for k in keys]
+    ev["volatility_20"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[4] for k in keys]
     return ev
 
 
@@ -176,7 +244,7 @@ class StrategyParams:
     max_positions: int = 10                 # 0=不限
     max_portfolio_exposure: float = 1.0      # 使用者新增：投組總曝險上限，1.0=可滿倉
 
-    sizing_mode: Literal["equal", "by_upgrade", "composite", "multifactor"] = "equal"
+    sizing_mode: Literal["equal", "by_upgrade", "composite", "multifactor", "enhanced"] = "equal"
     composite_alpha: float = 1.0
     composite_beta: float = 1.0
     composite_gamma: float = 1.0
@@ -219,6 +287,8 @@ def score_candidates(cands: pd.DataFrame, p: StrategyParams, stock_price: dict, 
         )
     elif p.sizing_mode == "multifactor":
         base = _multifactor_score(cands, stock_price, calendar)
+    elif p.sizing_mode == "enhanced":
+        base = _enhanced_score(cands)
     else:
         raise ValueError(f"未知sizing_mode: {p.sizing_mode}")
 
@@ -263,6 +333,25 @@ def _multifactor_score(cands: pd.DataFrame, stock_price: dict, calendar: pd.Date
 
     score = z_change * log_analyst * upside * mom_factor * streak_factor / vol
     return score.clip(lower=0)
+
+
+def _enhanced_score(cands: pd.DataFrame) -> pd.Series:
+    """直接對照同事backtest.js的signalScore()『enhanced』分支，逐項複製，不是重新設計：
+    surprise=異常調升(相對該股過去365天|調升幅度|中位數，clip[0.25,4])
+    analysts=log(1+分析師數)
+    upside=上漲空間(clip[0.01,0.60])
+    relativeMomentum=1+相對大盤動能(clip[0.25,2])
+    repeatBoost=1+0.15×max(0,過去60天調升次數-1)
+    risk=年化波動率(clip下限0.10，缺值預設0.35)
+    score = surprise × analysts × upside × relativeMomentum × repeatBoost ÷ risk
+    """
+    surprise = cands["abnormal_revision"].fillna(1.0).clip(lower=0.25, upper=4.0)
+    analysts = np.log1p(cands["analyst_count"].clip(lower=1))
+    upside = cands["upside_used"].clip(lower=0.01, upper=0.60)
+    relative_momentum = (1.0 + cands["relative_momentum_20"].fillna(0.0)).clip(lower=0.25, upper=2.0)
+    repeat_boost = 1.0 + 0.15 * (cands["recent_upgrades_60"].fillna(1.0) - 1).clip(lower=0)
+    risk = cands["volatility_20"].fillna(0.35).clip(lower=0.10)
+    return (surprise * analysts * upside * relative_momentum * repeat_boost / risk).clip(lower=0)
 
 
 def allocate_weights(scores: pd.Series, p: StrategyParams) -> pd.Series:
@@ -361,15 +450,15 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             h = holdings.pop(t)
             trades.append({
                 "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                "entry_price": h["entry_price"], "exit_price": stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan),
+                "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
                 "reason": reason,
             })
 
-        # --- 新進場候選 ---
+        # --- 新進場候選(含「已持有但又有新訊號」的股票——這種要當成重新進場處理：
+        # 更新目標價、重新起算持有天數，不能拿舊的、過時的目標價繼續判斷出場) ---
         new_rows_by_ticker = {}
         if day in entries_by_date.groups:
             todays = entries_by_date.get_group(day)
-            todays = todays[~todays["ticker"].isin(holdings.keys())]
             if len(todays) > 0:
                 scores = score_candidates(todays, p, stock_price, calendar)
                 scores.index = todays["ticker"].values
@@ -397,16 +486,26 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
                         "entry_price": row["entry_price_used"], "target": row["new_target"], "score": s,
                     }
+                elif t in holdings:
+                    # 已持有的股票這次雖然又有新訊號，但新分數沒擠進名額——原本的邏輯
+                    # 縫隙是這裡什麼都不做，導致舊權重留著沒被清掉，總曝險偷偷超過100%。
+                    # 這裡要跟一般被擠出排名一樣處理：出場。
+                    h = holdings.pop(t)
+                    trades.append({
+                        "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
+                        "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
+                        "reason": "排名被擠出",
+                    })
             for t in list(holdings.keys()):
                 if t in new_rows_by_ticker:
-                    continue  # 剛加入的已經在上面設好權重
+                    continue  # 剛加入/已處理過的在上面設好權重或出場了
                 if t in new_weights.index and new_weights[t] > 0:
                     holdings[t]["weight"] = new_weights[t]
                 else:
                     h = holdings.pop(t)
                     trades.append({
                         "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                        "entry_price": h["entry_price"], "exit_price": stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan),
+                        "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
                         "reason": "排名被擠出",
                     })
 
@@ -499,7 +598,7 @@ def summarize(book: pd.DataFrame, trades: pd.DataFrame) -> dict:
 
 if __name__ == "__main__":
     stock_price, stock_price_open, taiex, taiex_open, calendar, events = load_data()
-    ev = prepare_events(events, stock_price, stock_price_open, calendar)
+    ev = prepare_events(events, stock_price, stock_price_open, calendar, taiex=taiex)
     down_lookup = down_tickers_on_factory(events, calendar)
 
     print(f"UP事件(訊號)總數: {len(ev)}")
