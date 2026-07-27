@@ -272,12 +272,33 @@ def allocate_weights(scores: pd.Series, p: StrategyParams) -> pd.Series:
         # kind='stable'一定要指定：預設quicksort不保證同分數(常見於equal權重)的排序順序，
         # 會讓「哪些既有持股被擠出排名」在每次執行時不可預期，也讓JS版本無法逐日對出一樣的結果。
         scores = scores.sort_values(ascending=False, kind="stable").head(p.max_positions)
-    weights = scores / scores.sum()
-    weights = weights.clip(upper=p.max_weight_per_stock)
-    total = weights.sum()
-    if total > 0:
-        weights = weights / total * min(total, p.max_portfolio_exposure)
-    return weights
+
+    # 水位填充(water-filling)：單檔壓到上限後，省下來的額度要分給還沒被壓到上限的
+    # 其他股票，讓總曝險真的能填滿到max_portfolio_exposure，不是壓完就讓那筆錢閒置
+    # (原本clip後只整批等比例縮放，資金沒被壓到上限的股票分不到「被壓掉」的那份額度，
+    # 曝險常常填不滿)。跟同事版本的cappedWeights()對照，反覆做「這輪按分數比例分配，
+    # 誰超過上限就先鎖在上限、退出這輪、剩下的預算留給還沒鎖住的股票」，直到沒有人
+    # 再超過上限為止。
+    remaining = dict(scores)
+    result: dict[str, float] = {}
+    budget = p.max_portfolio_exposure
+    while remaining and budget > 1e-12:
+        total = sum(remaining.values()) or len(remaining)
+        capped_any = False
+        for ticker in list(remaining.keys()):
+            score = remaining[ticker]
+            proposed = budget * (score / total if total else 1.0 / len(remaining))
+            if proposed > p.max_weight_per_stock + 1e-12:
+                result[ticker] = p.max_weight_per_stock
+                budget -= p.max_weight_per_stock
+                del remaining[ticker]
+                capped_any = True
+        if not capped_any:
+            denom = sum(remaining.values()) or len(remaining)
+            for ticker, score in remaining.items():
+                result[ticker] = budget * (score / denom if denom else 1.0 / len(remaining))
+            break
+    return pd.Series(result)
 
 
 # ----------------------------------------------------------------------------

@@ -659,16 +659,38 @@ function allocateWeights(scoresArr, p) {
   if (p.maxPositions > 0 && arr.length > p.maxPositions) {
     arr = arr.slice().sort((a, b) => b.score - a.score).slice(0, p.maxPositions);
   }
-  const sum2 = arr.reduce((s, x) => s + x.score, 0);
-  const weights = new Map();
-  arr.forEach(x => weights.set(x.ticker, sum2 > 0 ? x.score / sum2 : 0));
-  for (const [k, v] of weights) weights.set(k, Math.min(v, p.maxWeightPerStock));
-  let total = 0; for (const v of weights.values()) total += v;
-  if (total > 0) {
-    const scale = Math.min(total, p.maxPortfolioExposure) / total;
-    for (const [k, v] of weights) weights.set(k, v * scale);
+
+  // 水位填充(water-filling)：單檔壓到上限後，省下來的額度要分給還沒被壓到上限的
+  // 其他股票，讓總曝險真的能填滿到maxPortfolioExposure，不是壓完就讓那筆錢閒置。
+  // 反覆做「這輪按分數比例分配，誰超過上限就先鎖在上限、退出這輪，剩下的預算留給
+  // 還沒鎖住的股票」，直到沒有人再超過上限為止，對照同事版本的cappedWeights()。
+  let remaining = arr.map(x => ({ ticker: x.ticker, score: x.score }));
+  const result = new Map();
+  let budget = p.maxPortfolioExposure;
+  while (remaining.length > 0 && budget > 1e-12) {
+    const total = remaining.reduce((s, x) => s + x.score, 0) || remaining.length;
+    let cappedAny = false;
+    const stillRemaining = [];
+    for (const item of remaining) {
+      const proposed = budget * (total ? item.score / total : 1 / remaining.length);
+      if (proposed > p.maxWeightPerStock + 1e-12) {
+        result.set(item.ticker, p.maxWeightPerStock);
+        budget -= p.maxWeightPerStock;
+        cappedAny = true;
+      } else {
+        stillRemaining.push(item);
+      }
+    }
+    remaining = stillRemaining;
+    if (!cappedAny) {
+      const denom = remaining.reduce((s, x) => s + x.score, 0) || remaining.length;
+      for (const item of remaining) {
+        result.set(item.ticker, budget * (denom ? item.score / denom : 1 / remaining.length));
+      }
+      break;
+    }
   }
-  return weights;
+  return result;
 }
 
 function runBacktest(p, startDate, endDate) {
