@@ -294,19 +294,6 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     if down_lookup is None:
         down_lookup = lambda d: set()
 
-    # 預先算好每檔股票的日報酬序列，不要在逐日迴圈裡對整條序列重算pct_change()，
-    # 200多檔股票、900多個交易日，迴圈裡重算會慢上好幾個量級。
-    stock_ret = {t: ser.pct_change(fill_method=None) for t, ser in stock_price.items()}
-    # 進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤
-    # (訊號隔日開盤才成交，當天開盤前的變動沒有參與到)；進場後第二天起用stock_ret。
-    stock_ret_open_entry = {}
-    if stock_price_open:
-        for t, close_ser in stock_price.items():
-            open_ser = stock_price_open.get(t)
-            if open_ser is None:
-                continue
-            stock_ret_open_entry[t] = (close_ser - open_ser) / open_ser
-
     cands_all = filter_candidates(ev, p)
     cands_all = cands_all[(cands_all["entry_date"] >= period_cal[0]) & (cands_all["entry_date"] <= period_cal[-1])]
 
@@ -319,20 +306,33 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     entries_by_date = cands_all.groupby("entry_date")
 
     for day_idx, day in enumerate(period_cal):
-        # --- 出場檢查(用「今天」是否有這檔股票的DOWN訊號來判斷，DOWN訊號來自完整events表) ---
+        prev_day = period_cal[day_idx - 1] if day_idx > 0 else None
+
+        # --- 隔夜段報酬：用「今天開盤前就已經持有」的部位、當時(昨天收盤後)的權重，
+        # 算「昨收→今開」這段報酬。今天才進場的部位還沒經歷這段，不計入。這段要在
+        # 出場/重新配置動作之前算，因為用的是「重新配置前」的舊權重。---
+        overnight_ret = 0.0
+        if prev_day is not None:
+            for t, h in holdings.items():
+                open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+                prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan)
+                if not np.isnan(open_now) and not np.isnan(prior_close) and prior_close != 0:
+                    overnight_ret += h["weight"] * (open_now / prior_close - 1)
+
+        # --- 出場檢查：達目標價用「前一天收盤價」判斷(對照今天開盤前就該知道的資訊，
+        # 不能用今天收盤價，那是還沒發生的事、會有前視偏誤)；調降訊號用「今天」是否
+        # 生效判斷；持有天數用交易日數(不是自然日數)，跟同事版本一致改用>=判斷。---
         down_today = down_lookup(day)
         exited = []
         for t, h in holdings.items():
-            # 用交易日數(不是自然日數)算持有天數，不然遇到連假(如農曆春節)會被自然日差距
-            # 誤判成「超過最長持有天數」提早出場，跟「最長持有天數」這個UI標籤講的交易日不一致。
             days_held = day_idx - h["entry_idx"]
-            price_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
+            prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan) if prev_day is not None else np.nan
             reason = None
             if t in down_today:
                 reason = "調降出場"
-            elif not np.isnan(price_now) and price_now >= h["target"]:
+            elif not np.isnan(prior_close) and prior_close >= h["target"]:
                 reason = "達目標價出場"
-            elif days_held > p.max_hold_days:
+            elif days_held >= p.max_hold_days:
                 reason = "超過最長持有天數"
             if reason:
                 exited.append((t, reason))
@@ -389,16 +389,19 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         "reason": "排名被擠出",
                     })
 
-        # --- 當日報酬(固定資本100，權重在持有期間不因股價變動而複利滾動) ---
-        daily_ret = 0.0
+        # --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。
+        # 不管是今天新進場還是本來就持有、繼續留著的部位，都用今天的新權重算這段
+        # ——這樣同一檔股票如果因為新部位加入被稀釋，稀釋前(隔夜段)已經用舊權重
+        # 算過的報酬不會被追溯打折，稀釋只影響稀釋之後(盤中段)這一段。當天出場的
+        # 部位已經從holdings移除，不會有盤中段(對照同事版本的既有簡化)。---
+        intraday_ret = 0.0
         for t, h in holdings.items():
-            is_entry_day = h["entry_date"] == day
-            rser = stock_ret_open_entry.get(t) if is_entry_day else stock_ret.get(t)
-            if rser is None:
-                continue
-            r = rser.get(day, np.nan)
-            if not np.isnan(r):
-                daily_ret += h["weight"] * r
+            close_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
+            open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+            if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
+                intraday_ret += h["weight"] * (close_now / open_now - 1)
+
+        daily_ret = overnight_ret + intraday_ret
 
         rows.append({
             "date": day,

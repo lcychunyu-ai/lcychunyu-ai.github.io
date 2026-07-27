@@ -440,7 +440,7 @@ async function sbFetchAll(path, params) {
 }
 
 let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [], TAIEX_OPEN = [];
-let STOCK_RET = {}, TAIEX_RET = [], STOCK_RET_OPEN_ENTRY = {};
+let TAIEX_RET = [];
 let EV_UP = [], DOWN_BY_DATE = new Map();
 let RAW_UP_COUNT = 0;
 
@@ -567,24 +567,6 @@ async function loadAll() {
   TAIEX = bundle.taiex_close;
   TAIEX_OPEN = bundle.taiex_open || [];
 
-  STOCK_RET = {};
-  STOCK_RET_OPEN_ENTRY = {};
-  for (const [t, arr] of Object.entries(PRICES)) {
-    const r = new Array(arr.length).fill(null);
-    for (let i = 1; i < arr.length; i++) {
-      if (arr[i] != null && arr[i - 1] != null && arr[i - 1] !== 0) r[i] = (arr[i] - arr[i - 1]) / arr[i - 1];
-    }
-    STOCK_RET[t] = r;
-
-    const openArr = PRICES_OPEN[t];
-    if (openArr) {
-      const ro = new Array(arr.length).fill(null);
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i] != null && openArr[i] != null && openArr[i] !== 0) ro[i] = (arr[i] - openArr[i]) / openArr[i];
-      }
-      STOCK_RET_OPEN_ENTRY[t] = ro;
-    }
-  }
   TAIEX_RET = new Array(TAIEX.length).fill(null);
   for (let i = 1; i < TAIEX.length; i++) {
     if (TAIEX[i] != null && TAIEX[i - 1] != null && TAIEX[i - 1] !== 0) TAIEX_RET[i] = (TAIEX[i] - TAIEX[i - 1]) / TAIEX[i - 1];
@@ -711,18 +693,32 @@ function runBacktest(p, startDate, endDate) {
     const day = DATES[i];
     const downToday = DOWN_BY_DATE.get(i) || new Set();
 
-    // --- 出場 ---
+    // --- 隔夜段報酬：用「今天開盤前就已經持有」的部位、當時(昨天收盤後)的權重，
+    // 算「昨收→今開」這段報酬。今天才進場的部位還沒經歷這段，不計入。這段要在
+    // 出場/重新配置動作之前算，因為用的是「重新配置前」的舊權重。---
+    let overnightRet = 0;
+    if (i > startIdx) {
+      for (const [t, h] of holdings) {
+        const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
+        const openNow = openArr ? openArr[i] : null;
+        const priorClose = priceArr ? priceArr[i - 1] : null;
+        if (openNow != null && priorClose != null && priorClose !== 0) {
+          overnightRet += h.weight * (openNow / priorClose - 1);
+        }
+      }
+    }
+
+    // --- 出場：達目標價用「前一天收盤價」判斷(對照今天開盤前就該知道的資訊，不能
+    // 用今天收盤價，那是還沒發生的事、會有前視偏誤)；持有天數用交易日數。---
     const toExit = [];
     for (const [t, h] of holdings) {
-      // 用交易日數(不是自然日數)算持有天數，不然遇到連假(如農曆春節)會被自然日差距
-      // 誤判成「超過最長持有天數」提早出場，跟「最長持有天數」這個UI標籤講的交易日不一致。
       const daysHeld = i - h.entryIdx;
       const priceArr = PRICES[t];
-      const priceNow = priceArr ? priceArr[i] : null;
+      const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
       let reason = null;
       if (p.exitOnDown && downToday.has(t)) reason = '調降出場';
-      else if (p.exitOnTarget && priceNow != null && priceNow >= h.target) reason = '達目標價出場';
-      else if (daysHeld > p.maxHoldDays) reason = '超過最長持有天數';
+      else if (p.exitOnTarget && priorClose != null && priorClose >= h.target) reason = '達目標價出場';
+      else if (daysHeld >= p.maxHoldDays) reason = '超過最長持有天數';
       if (reason) toExit.push([t, reason]);
     }
     for (const [t, reason] of toExit) {
@@ -781,23 +777,24 @@ function runBacktest(p, startDate, endDate) {
       }
     }
 
-    // --- 當日報酬 + 個股歸因 ---
-    // 唯一策略固定用開盤進場：進場當天只算「開盤買進→收盤」這段的報酬(不是完整一天的
-    // 收盤對收盤)，因為開盤前的價格變動沒有參與到；進場後第二天起用逐日收盤對收盤。
-    // 出場當天不計報酬(部位當天被移除，跟固定資本每日平帳的簡化一致)。
-    let dailyRet = 0;
+    // --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。
+    // 不管是今天新進場還是本來就持有、繼續留著的部位，都用今天的新權重算這段——
+    // 這樣同一檔股票如果因為新部位加入被稀釋，稀釋前(隔夜段)已經用舊權重算過的
+    // 報酬不會被追溯打折，稀釋只影響稀釋之後(盤中段)這一段。當天出場的部位已經
+    // 從holdings移除，不會有盤中段(對照同事版本的既有簡化)。個股歸因表顯示的是
+    // 盤中段，隔夜段只計入當日總報酬、不拆分到個股(維持既有UI簡化)。---
+    let intradayRet = 0;
     const attribution = [];
     for (const [t, h] of holdings) {
       const isEntryDay = h.entryIdx === i;
-      const r = isEntryDay
-        ? (STOCK_RET_OPEN_ENTRY[t] ? STOCK_RET_OPEN_ENTRY[t][i] : null)
-        : (STOCK_RET[t] ? STOCK_RET[t][i] : null);
-      const priceArr = PRICES[t];
+      const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
       const priceEnd = priceArr ? priceArr[i] : null;
-      const priceStart = isEntryDay ? (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null) : (priceArr && i > 0 ? priceArr[i - 1] : null);
-      if (r != null) dailyRet += h.weight * r;
+      const priceStart = openArr ? openArr[i] : null;
+      const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
+      if (r != null) intradayRet += h.weight * r;
       attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay });
     }
+    const dailyRet = overnightRet + intradayRet;
     const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
 
     rows.push({
@@ -1083,7 +1080,7 @@ function renderLedgerDetail() {
   const attributionRows = r.attribution.slice().sort((a, b) => (b.contribution || 0) - (a.contribution || 0)).map(a => `
     <tr>
       <td><b>${a.ticker}</b></td>
-      <td style="color:var(--ink-faint);">${a.isEntryDay ? '開盤至收盤(進場日)' : '收盤至收盤'}</td>
+      <td style="color:var(--ink-faint);">開盤至收盤(盤中段)${a.isEntryDay ? '·進場日' : ''}</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
       <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
       <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
@@ -1102,7 +1099,7 @@ function renderLedgerDetail() {
       <div class="brief-line">${r.date}：訊號公布後於下一交易日開盤價執行。</div>
       <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「張數」欄位依當日收盤價換算整股（1張=1,000股，無條件捨去）。</div>
       ${r.buys.length === 0 && r.sells.length === 0 ? '<div class="brief-line">今日無再平衡交易。</div>' : ''}
-      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。進場當天報酬只計算「開盤買進→收盤」這段，前一交易日收盤到今天開盤的跳空不計入策略報酬。</div>
+      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。每日報酬拆成隔夜段(用前一天收盤到當天開盤，套用前一天收盤時的舊權重)+盤中段(用當天開盤到收盤，套用重新配置後的新權重)兩段加總；進場當天沒有隔夜段，出場當天沒有盤中段。</div>
     </div>
 
     <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
@@ -1135,7 +1132,7 @@ function renderLedgerDetail() {
 
     <div class="eyebrow-row" style="margin-top:4px;"><span class="eyebrow">Position Return Attribution</span></div>
     <div class="block-title" style="margin-left:0; font-size:15px;">個股當日報酬明細</div>
-    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股區間報酬；各列貢獻加總應等於策略當日總報酬。</p>
+    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股盤中段報酬(開盤至收盤)；各列貢獻加總等於當日「盤中段」總報酬，不含隔夜段(前一天收盤到當天開盤，用重新配置前的舊權重)。</p>
     <div class="table-wrap" style="margin-bottom:18px;">
       <table class="book-table">
         <thead><tr><th>股票</th><th>持有區間</th><th>計算權重</th><th>起始價</th><th>結束價</th><th>個股報酬</th><th>策略貢獻</th></tr></thead>
