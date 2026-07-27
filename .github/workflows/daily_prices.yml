@@ -1,0 +1,26 @@
+name: Daily Stock Prices Update
+
+on:
+  schedule:
+    # 每天台灣時間下午 15:00 (UTC 07:00)，台股13:30收盤後留緩衝時間讓yfinance資料更新
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}  # 允許手動觸發測試
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests yfinance pandas
+
+      - name: Run price update
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python3 update_stock_prices.py --days 10
