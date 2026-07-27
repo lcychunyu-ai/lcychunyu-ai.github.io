@@ -3,12 +3,20 @@ __pycache__/
 .DS_Store
 .Rhistory
 
+# jsdom等本機驗證用的npm套件(每次驗證strategy.html用完就刪，不進版控)
+node_modules/
+package.json
+package-lock.json
+
 # 不屬於FactSet專案的個人資料/其他專案
 AI Agent Matthias/
 telegram_config.json
 macro-analysis-framework_SKILL.md
 mtd_ccc_backtest.py
 .claude/
+
+# 同事的獨立專案(Node.js+SQLite，拿來對照方法論用，不是我們的原始碼，不進版控)
+factset/
 
 # factset_data/ 全部是可重新產生的資料產出(JSON/CSV/xlsx/HTML快照)，不進版控
 factset_data/*

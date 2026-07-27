@@ -336,26 +336,49 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             })
 
         # --- 新進場候選 ---
+        new_rows_by_ticker = {}
         if day in entries_by_date.groups:
             todays = entries_by_date.get_group(day)
             todays = todays[~todays["ticker"].isin(holdings.keys())]
             if len(todays) > 0:
                 scores = score_candidates(todays, p, stock_price, calendar)
                 scores.index = todays["ticker"].values
-                existing_scores = pd.Series(0.0, index=list(holdings.keys()))
-                combined_scores = pd.concat([existing_scores, scores])
-                combined_scores = combined_scores[~combined_scores.index.duplicated(keep="last")]
-                new_weights = allocate_weights(combined_scores, p)
+                # 同一天同一ticker可能有多筆(不同訊號日剛好映射到同一個進場日)，
+                # 分數取最後一筆、進場價/目標價取第一筆出現的，跟combined_scores原本的
+                # keep="last"對照JS版firstRowByTicker的慣例一致。
+                scores = scores[~scores.index.duplicated(keep="last")]
                 for t in scores.index:
-                    if t in new_weights.index and new_weights[t] > 0:
-                        row = todays[todays["ticker"] == t].iloc[0]
-                        holdings[t] = {
-                            "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
-                            "entry_price": row["entry_price_used"], "target": row["new_target"],
-                        }
-                for t in list(holdings.keys()):
-                    if t in new_weights.index:
-                        holdings[t]["weight"] = new_weights[t]
+                    new_rows_by_ticker[t] = (todays[todays["ticker"] == t].iloc[0], scores[t])
+
+        # --- 每天都對「目前整個帳本(舊部位+今天新候選)」重新正規化權重 ---
+        # 固定資本每日平帳：不管前一天賺賠，隔天開盤前都會把整個投組還原回固定本金重新部署，
+        # 所以權重不能只更新「今天有變動的那一小部分」，要整批一起重算，總曝險才會真的
+        # 每天都保證不超過max_portfolio_exposure，不會有舊部位權重被放著不動、跟新配置疊加
+        # 導致總曝險偷偷超過100%的問題。
+        if holdings or new_rows_by_ticker:
+            score_map = {t: h["score"] for t, h in holdings.items()}
+            score_map.update({t: s for t, (_, s) in new_rows_by_ticker.items()})
+            combined_scores = pd.Series(score_map)
+            new_weights = allocate_weights(combined_scores, p)
+
+            for t, (row, s) in new_rows_by_ticker.items():
+                if t in new_weights.index and new_weights[t] > 0:
+                    holdings[t] = {
+                        "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
+                        "entry_price": row["entry_price_used"], "target": row["new_target"], "score": s,
+                    }
+            for t in list(holdings.keys()):
+                if t in new_rows_by_ticker:
+                    continue  # 剛加入的已經在上面設好權重
+                if t in new_weights.index and new_weights[t] > 0:
+                    holdings[t]["weight"] = new_weights[t]
+                else:
+                    h = holdings.pop(t)
+                    trades.append({
+                        "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
+                        "entry_price": h["entry_price"], "exit_price": stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan),
+                        "reason": "排名被擠出",
+                    })
 
         # --- 當日報酬(固定資本100，權重在持有期間不因股價變動而複利滾動) ---
         daily_ret = 0.0
@@ -372,6 +395,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             "date": day,
             "holdings": ",".join(holdings.keys()),
             "n_positions": len(holdings),
+            "exposure": sum(h["weight"] for h in holdings.values()),
             "daily_return": daily_ret,
             "taiex_return": taiex_ret.get(day, np.nan),
         })

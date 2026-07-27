@@ -722,37 +722,51 @@ function runBacktest(p, startDate, endDate) {
       trades.push({ ticker: t, entryDate: h.entryDate, exitDate: day, entryPrice: h.entryPrice, exitPrice: priceArr ? priceArr[i] : null, reason });
     }
 
-    // --- 新進場 ---
+    // --- 新進場候選 ---
     const buysToday = [], sellsToday = toExit.map(([t, reason]) => ({ ticker: t, reason }));
+    const newRowsByTicker = new Map(); // ticker -> {row, score} (keep last，同一天同ticker重複時取最後一筆)
     if (entriesByIdx.has(i)) {
       const todaysAll = entriesByIdx.get(i).filter(c => !holdings.has(c.ticker));
       if (todaysAll.length > 0) {
-        const scoreMap = new Map(); // ticker -> {score, ref} (keep last, 對照pandas duplicated keep='last')
-        if (p.sizingMode === 'multifactor') {
-          const scores = scoreMultifactorBatch(todaysAll, p);
-          todaysAll.forEach((c, idx) => scoreMap.set(c.ticker, { score: scores[idx], ref: c }));
+        const scoresArr = p.sizingMode === 'multifactor'
+          ? scoreMultifactorBatch(todaysAll, p)
+          : todaysAll.map(c => scoreOne(c, p));
+        todaysAll.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
+      }
+    }
+
+    // --- 每天都對「目前整個帳本(舊部位+今天新候選)」重新正規化權重 ---
+    // 固定資本每日平帳：不管前一天賺賠，隔天開盤前都會把整個投組還原回固定本金重新部署，
+    // 所以權重不能只更新「今天有變動的那一小部分」，要整批一起重算，總曝險才會真的
+    // 每天都保證不超過maxPortfolioExposure，不會有舊部位權重被放著不動、跟新配置疊加
+    // 導致總曝險偷偷超過100%的問題。
+    if (holdings.size > 0 || newRowsByTicker.size > 0) {
+      const combined = [];
+      for (const [t, h] of holdings) {
+        if (!newRowsByTicker.has(t)) combined.push({ ticker: t, score: h.score });
+      }
+      for (const [t, v] of newRowsByTicker) combined.push({ ticker: t, score: v.score });
+      const newWeights = allocateWeights(combined, p);
+
+      for (const [t, v] of newRowsByTicker) {
+        const w = newWeights.get(t);
+        if (w != null && w > 0) {
+          const row = v.row;
+          holdings.set(t, { weight: w, entryIdx: i, entryDate: day, entryPrice: row.entryPriceUsed, target: row.newTarget, score: v.score });
+          buysToday.push({ ticker: t, price: row.entryPriceUsed, weight: w });
+        }
+      }
+      for (const t of [...holdings.keys()]) {
+        if (newRowsByTicker.has(t)) continue;
+        const w = newWeights.get(t);
+        if (w != null && w > 0) {
+          holdings.get(t).weight = w;
         } else {
-          todaysAll.forEach(c => scoreMap.set(c.ticker, { score: scoreOne(c, p), ref: c }));
-        }
-        const combined = [];
-        for (const t of holdings.keys()) combined.push({ ticker: t, score: 0 });
-        for (const [t, v] of scoreMap) combined.push({ ticker: t, score: v.score });
-        const newWeights = allocateWeights(combined, p);
-
-        // 用「第一筆出現」的候選資料當進場價/目標價(對照 todays[todays.ticker==t].iloc[0])
-        const firstRowByTicker = new Map();
-        todaysAll.forEach(c => { if (!firstRowByTicker.has(c.ticker)) firstRowByTicker.set(c.ticker, c); });
-
-        for (const t of scoreMap.keys()) {
-          const w = newWeights.get(t);
-          if (w != null && w > 0) {
-            const row = firstRowByTicker.get(t);
-            holdings.set(t, { weight: w, entryIdx: i, entryDate: day, entryPrice: row.entryPriceUsed, target: row.newTarget });
-            buysToday.push({ ticker: t, price: row.entryPriceUsed, weight: w });
-          }
-        }
-        for (const t of holdings.keys()) {
-          if (newWeights.has(t)) holdings.get(t).weight = newWeights.get(t);
+          const h = holdings.get(t);
+          holdings.delete(t);
+          const priceArr = PRICES[t];
+          trades.push({ ticker: t, entryDate: h.entryDate, exitDate: day, entryPrice: h.entryPrice, exitPrice: priceArr ? priceArr[i] : null, reason: '排名被擠出' });
+          sellsToday.push({ ticker: t, reason: '排名被擠出' });
         }
       }
     }
