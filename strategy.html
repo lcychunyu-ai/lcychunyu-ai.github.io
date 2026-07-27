@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>FactSet 目標價策略回測</title>
+<title>策略回測 · Revision Lab</title>
 <style>
   @media (prefers-color-scheme: dark) {
     :root {
@@ -12,7 +12,9 @@
       --ink: #e8ecf2; --ink-dim: #8a95a5; --ink-faint: #566073;
       --accent: #d9a94f; --accent-ink: #1a1206;
       --up: #ef5b57; --up-dim: #3a2224; --down: #33ab7a; --down-dim: #1c332b; --grid: #1e2733;
-      --warn: #d9a94f; --warn-dim: #3a2f16;
+      --warn: #d9a94f; --warn-dim: #3a2f16; --warn-ink: #1a1206;
+      --safe: #33ab7a; --safe-dim: #14261d; --safe-ink: #06150e;
+      --chip-bg: #1a222d;
     }
   }
   @media (prefers-color-scheme: light) {
@@ -22,7 +24,9 @@
       --ink: #1c1f24; --ink-dim: #63615a; --ink-faint: #96938a;
       --accent: #b3801f; --accent-ink: #fff8ea;
       --up: #d33c37; --up-dim: #fbe4e2; --down: #17835a; --down-dim: #dcf1e7; --grid: #eae5d8;
-      --warn: #b3801f; --warn-dim: #f6ecd4;
+      --warn: #b3801f; --warn-dim: #f6ecd4; --warn-ink: #2b1c02;
+      --safe: #17835a; --safe-dim: #dcf1e7; --safe-ink: #06301f;
+      --chip-bg: #f1eee5;
     }
   }
   :root[data-theme="dark"] {
@@ -31,7 +35,9 @@
     --ink: #e8ecf2; --ink-dim: #8a95a5; --ink-faint: #566073;
     --accent: #d9a94f; --accent-ink: #1a1206;
     --up: #ef5b57; --up-dim: #3a2224; --down: #33ab7a; --down-dim: #1c332b; --grid: #1e2733;
-    --warn: #d9a94f; --warn-dim: #3a2f16;
+    --warn: #d9a94f; --warn-dim: #3a2f16; --warn-ink: #1a1206;
+    --safe: #33ab7a; --safe-dim: #14261d; --safe-ink: #06150e;
+    --chip-bg: #1a222d;
   }
   :root[data-theme="light"] {
     --bg: #f4f2ec; --bg-grad: radial-gradient(1200px 600px at 15% -10%, #fbfaf6 0%, #f4f2ec 55%);
@@ -39,7 +45,9 @@
     --ink: #1c1f24; --ink-dim: #63615a; --ink-faint: #96938a;
     --accent: #b3801f; --accent-ink: #fff8ea;
     --up: #d33c37; --up-dim: #fbe4e2; --down: #17835a; --down-dim: #dcf1e7; --grid: #eae5d8;
-    --warn: #b3801f; --warn-dim: #f6ecd4;
+    --warn: #b3801f; --warn-dim: #f6ecd4; --warn-ink: #2b1c02;
+    --safe: #17835a; --safe-dim: #dcf1e7; --safe-ink: #06301f;
+    --chip-bg: #f1eee5;
   }
 
   * { box-sizing: border-box; }
@@ -52,79 +60,105 @@
   body { max-width: 100%; overflow-x: hidden; }
   .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
   button, select, input { font-family: inherit; }
+  a { color: inherit; }
 
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+  .wrap { max-width: 1220px; margin: 0 auto; padding: 24px 20px 60px; }
 
   header.top {
-    display: flex; align-items: baseline; justify-content: space-between;
-    gap: 16px; flex-wrap: wrap; margin-bottom: 22px; padding-bottom: 18px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 24px; padding-bottom: 18px;
     border-bottom: 1px solid var(--border);
   }
-  header.top .title-block h1 { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -0.01em; text-wrap: balance; }
-  header.top .title-block p { margin: 4px 0 0; color: var(--ink-dim); font-size: 13.5px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em;
-    padding: 5px 10px; border-radius: 100px;
-    background: var(--panel-2); border: 1px solid var(--border); color: var(--ink-dim);
-    text-decoration: none;
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--bg);
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; letter-spacing: -0.02em;
+    flex-shrink: 0;
   }
-  .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .brand .name { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
+  .nav-pills { display: flex; gap: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 100px; padding: 3px; }
+  .nav-pills a {
+    font-size: 12.5px; font-weight: 700; color: var(--ink-dim); text-decoration: none;
+    padding: 7px 16px; border-radius: 100px; transition: background .12s ease, color .12s ease;
+  }
+  .nav-pills a.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  .status-tag { font-size: 11.5px; color: var(--ink-faint); display: flex; align-items: center; gap: 6px; }
+  .status-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--safe); }
 
-  section { margin-bottom: 30px; }
-  h2.section-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 12px; }
+  section { margin-bottom: 22px; }
+
+  .eyebrow-row { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+  .step-num {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--ink); color: var(--bg);
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 11.5px; flex-shrink: 0;
+  }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-faint); }
+  .block-title { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; margin: 4px 0 14px 36px; }
 
   .layout { display: grid; grid-template-columns: 300px 1fr; gap: 22px; align-items: start; }
-  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
 
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .param-field { margin-bottom: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .panel.tight { padding: 14px 16px; }
+
+  .param-field { margin-bottom: 12px; }
   .param-field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-dim); margin-bottom: 4px; }
   .param-field .hint { font-size: 10.5px; color: var(--ink-faint); margin-top: 3px; }
-  .param-field input[type="number"], .param-field input[type="date"], .param-field select {
+  .param-field input[type="number"], .param-field input[type="date"], .param-field select, .param-field input[type="text"] {
     width: 100%; font-size: 13px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--border);
     border-radius: 8px; padding: 7px 9px;
+  }
+  .input-suffix { position: relative; }
+  .input-suffix input { padding-right: 40px !important; }
+  .input-suffix .suffix {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 10.5px; color: var(--ink-faint); font-weight: 600; pointer-events: none;
   }
   .param-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .param-field.checkbox { display: flex; align-items: center; gap: 8px; }
   .param-field.checkbox label { margin: 0; }
-  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; margin: 0 0 13px; }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; margin: 0 0 12px; }
   legend { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 6px; }
 
   .btn {
-    width: 100%; font-size: 13.5px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
-    border: none; border-radius: 9px; padding: 10px; cursor: pointer; letter-spacing: 0.02em;
+    font-size: 13.5px; font-weight: 700; color: var(--bg); background: var(--ink);
+    border: none; border-radius: 9px; padding: 11px; cursor: pointer; letter-spacing: 0.01em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   }
-  .btn:hover { filter: brightness(1.05); }
-  .btn.secondary {
-    color: var(--ink); background: var(--panel-2); border: 1px solid var(--border); font-weight: 600;
-  }
+  .btn.block { width: 100%; }
+  .btn:hover { filter: brightness(1.15); }
+  .btn.secondary { color: var(--ink); background: var(--panel-2); border: 1px solid var(--border); font-weight: 600; }
+  .btn.safe { color: var(--safe-ink); background: var(--safe); }
+  .btn.caution { color: var(--warn-ink); background: var(--warn); }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.small { padding: 8px 14px; font-size: 12.5px; }
 
-  .tabbar { display: flex; gap: 4px; background: var(--panel-2); border-radius: 100px; padding: 3px; margin-bottom: 16px; width: fit-content; }
-  .tabbtn { font-size: 12.5px; font-weight: 700; color: var(--ink-dim); background: none; border: none; padding: 7px 16px; border-radius: 100px; cursor: pointer; }
-  .tabbtn.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
-  .mode-pane { display: none; }
-  .mode-pane.active { display: block; }
+  details.explainer-toggle > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-dim); list-style: none; }
+  details.explainer-toggle > summary::-webkit-details-marker { display: none; }
+  details.explainer-toggle > summary::before { content: "▶ "; font-size: 10px; }
+  details.explainer-toggle[open] > summary::before { content: "▼ "; }
+  details.explainer-toggle { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-2); }
 
-  .warn-banner {
-    display: flex; gap: 10px; align-items: flex-start; background: var(--warn-dim); border: 1px solid var(--warn);
-    border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 12.5px; color: var(--ink);
-  }
-  .warn-banner b { color: var(--warn); }
-
-  .card-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
-  @media (max-width: 700px) { .card-row { grid-template-columns: repeat(2, 1fr); } }
-  .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+  @media (max-width: 760px) { .card-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; }
   .stat-card .label { font-size: 11px; color: var(--ink-faint); font-weight: 600; }
-  .stat-card .value { font-size: 21px; font-weight: 800; margin-top: 4px; }
+  .stat-card .value { font-size: 24px; font-weight: 800; margin-top: 5px; letter-spacing: -0.01em; }
   .stat-card .value.up { color: var(--up); }
   .stat-card .value.down { color: var(--down); }
-  .stat-card .sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 2px; }
+  .stat-card .value.muted { color: var(--ink-faint); font-size: 18px; }
+  .stat-card .sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 4px; }
 
-  .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+  .coverage-strip {
+    display: flex; flex-wrap: wrap; gap: 28px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 20px; margin-bottom: 18px;
+  }
+  .coverage-item .label { font-size: 10.5px; color: var(--ink-faint); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .coverage-item .value { font-size: 15px; font-weight: 700; margin-top: 3px; }
+
+  .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
   svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
-  .legend-row { display: flex; gap: 16px; margin-bottom: 10px; font-size: 11.5px; color: var(--ink-dim); }
+  .legend-row { display: flex; gap: 16px; margin-bottom: 4px; font-size: 11.5px; color: var(--ink-dim); }
   .legend-row .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 
   .chart-tooltip {
@@ -134,8 +168,8 @@
   }
 
   table.book-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  table.book-table th { text-align: left; font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  table.book-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.book-table th { text-align: left; font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  table.book-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
   table.book-table tr:hover td { background: var(--panel-2); }
   .table-wrap { overflow-x: auto; }
   .tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 100px; }
@@ -149,27 +183,79 @@
   .empty-state { text-align: center; color: var(--ink-faint); font-size: 13px; }
   .grid-result-row { cursor: pointer; }
   .grid-result-row:hover td { background: var(--panel-2); }
-  .grid-result-row.best td { background: var(--up-dim); }
+  .grid-result-row.best td { background: var(--safe-dim); }
 
-  .compare-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-  @media (max-width: 700px) { .compare-row { grid-template-columns: 1fr; } }
-  .compare-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
-  .compare-card h4 { margin: 0 0 8px; font-size: 12px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; }
-  .compare-card .row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; }
+  .section-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; margin-bottom: 22px; }
+  .section-card.accent-safe { border-top: 3px solid var(--safe); }
+  .section-card.accent-caution { border-top: 3px solid var(--warn); }
+  .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+  .section-head .eyebrow { display: block; }
+  .section-head h3 { margin: 4px 0 0; font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+  .section-sub { font-size: 12px; color: var(--ink-dim); margin: 8px 0 16px; }
+  .pill-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 100px; margin-left: 8px; vertical-align: middle; }
+  .pill-badge.safe { background: var(--safe-dim); color: var(--safe); }
+  .pill-badge.caution { background: var(--warn-dim); color: var(--warn); }
+
+  .recommend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 820px) { .recommend-grid { grid-template-columns: 1fr; } }
+  .recommend-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .recommend-card h4 { margin: 0 0 12px; font-size: 14px; font-weight: 800; }
+  .mini-stat-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 10px; }
+  .mini-stat .label { font-size: 10px; color: var(--ink-faint); font-weight: 600; }
+  .mini-stat .value { font-size: 17px; font-weight: 800; margin-top: 2px; }
+  .mini-stat .sub { font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+  .param-summary-line { font-size: 11px; color: var(--ink-faint); margin: 8px 0 12px; line-height: 1.6; }
+  .recommend-actions { display: flex; gap: 8px; }
+  .recommend-actions .btn { flex: 1; }
+
+  .disclaimer-bar {
+    background: var(--warn-dim); color: var(--warn-ink); border-radius: 10px; padding: 12px 14px;
+    font-size: 12px; margin-top: 16px; line-height: 1.65;
+  }
+  :root[data-theme="dark"] .disclaimer-bar, @media (prefers-color-scheme: dark) { }
+
+  .capital-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .capital-row .param-field { margin: 0; min-width: 200px; }
+
+  .ledger-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ledger-controls select, .ledger-controls input[type="date"] {
+    font-size: 12.5px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--ink);
+  }
+  .ledger-controls label { font-size: 11.5px; color: var(--ink-dim); font-weight: 600; }
+
+  .brief-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+  .brief-panel .brief-eyebrow { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+  .brief-panel h4 { margin: 3px 0 10px; font-size: 15px; font-weight: 800; }
+  .brief-panel .brief-line { font-size: 12px; color: var(--ink-dim); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .brief-panel .brief-formula { font-size: 10.5px; color: var(--ink-faint); border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 4px; line-height: 1.6; }
+
+  .explain-block { border-left: 3px solid var(--safe); background: var(--panel-2); border-radius: 0 10px 10px 0; padding: 12px 16px; margin-bottom: 16px; }
+  .explain-block .brief-eyebrow { font-size: 10.5px; font-weight: 700; color: var(--safe); letter-spacing: 0.08em; text-transform: uppercase; }
+  .explain-block h4 { margin: 3px 0 8px; font-size: 14px; font-weight: 800; }
+  .explain-block p { margin: 0; font-size: 12.5px; color: var(--ink-dim); line-height: 1.7; }
+
+  .two-col-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 820px) { .two-col-tables { grid-template-columns: 1fr; } }
+
+  footer.disclaimer-footer {
+    margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--ink-faint); text-align: center; line-height: 1.7;
+  }
 </style>
 </head>
 <body>
 
 <div class="wrap">
   <header class="top">
-    <div class="title-block">
-      <h1>目標價調升交易策略回測</h1>
-      <p>事件驅動 · 分析師目標價調升訊號 · 固定資本100每日平帳</p>
+    <div class="brand">
+      <div class="mark">FS</div>
+      <div class="name">Revision Lab</div>
     </div>
-    <div style="display:flex; align-items:center; gap:12px;">
-      <a href="index.html" class="badge">← 回到修正溫度計</a>
-      <span class="badge"><span class="dot"></span>即時連線 · <span id="updated-at" class="mono">—</span></span>
+    <div class="nav-pills">
+      <a href="index.html">市場溫度計</a>
+      <a href="strategy.html" class="active">策略回測</a>
     </div>
+    <div class="status-tag"><span class="dot"></span>行情至 <span id="updated-at" class="mono">—</span></div>
   </header>
 
   <div id="loading-banner" class="empty-state" style="padding:60px 20px;">正在連線資料庫與載入股價資料…</div>
@@ -180,136 +266,157 @@
 
   <div id="main-content" style="display:none;">
 
-    <div class="tabbar" id="mode-tabs">
-      <button class="tabbtn active" data-mode="manual">手動回測</button>
-      <button class="tabbtn" data-mode="strict">嚴格驗證模式</button>
-      <button class="tabbtn" data-mode="explore">歷史探索模式</button>
-    </div>
-
     <div class="layout">
       <div class="panel" id="param-panel">
-        <h2 class="section-label">參數設定</h2>
+        <div class="eyebrow-row"><div class="step-num">01</div><span class="eyebrow">Strategy Inputs</span></div>
+        <div class="block-title">回測參數</div>
 
-        <fieldset>
-          <legend>回測區間</legend>
+        <div class="param-row2">
+          <div class="param-field"><label>開始日期</label><input type="date" id="p-start" value="2023-01-01"/></div>
+          <div class="param-field"><label>結束日期</label><input type="date" id="p-end" value="2026-12-31"/></div>
+        </div>
+
+        <div class="param-row2">
+          <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="3" step="0.5"/><span class="suffix">%</span></div></div>
+          <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1"/><span class="suffix">位</span></div></div>
+        </div>
+
+        <div class="param-row2">
+          <div class="param-field"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="0" step="1"/><span class="suffix">%</span></div></div>
+          <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5"/><span class="suffix">%</span></div></div>
+        </div>
+
+        <div class="param-row2">
+          <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="20" step="5"/><span class="suffix">交易日</span></div></div>
+          <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="10" step="1"/><span class="suffix">0=不限</span></div></div>
+        </div>
+
+        <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5"/><span class="suffix">%</span></div></div>
+
+        <div class="param-field">
+          <label>配置方式</label>
+          <select id="p-sizing">
+            <option value="equal">等權</option>
+            <option value="by_upgrade">調升幅度加權</option>
+            <option value="composite" selected>原始綜合分數</option>
+            <option value="multifactor" disabled>第二代多因子（即將推出）</option>
+          </select>
+        </div>
+
+        <details class="explainer-toggle">
+          <summary>配置方式怎麼計算？</summary>
+          <div class="explainer" style="margin-top:10px;">
+            <p><b>等權</b></p>
+            <span class="formula">每檔權重 = 1 ÷ 符合條件的股票數</span>
+            <p><b>調升幅度加權</b></p>
+            <span class="formula">權重 ∝ 本次目標價調升%</span>
+            <p><b>原始綜合分數</b></p>
+            <span class="formula">分數 = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
+            <p style="margin:6px 0 0; font-size:11px;">分數除以總分得到權重，再套用單檔上限與最大持股數。∝ 表示按比例分配。</p>
+            <p style="margin-top:8px;"><b>第二代多因子</b>（即將推出）</p>
+            <span class="formula" style="margin-bottom:0;">異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
+          </div>
+        </details>
+
+        <div id="composite-params" style="display:block;">
           <div class="param-row2">
-            <div class="param-field"><label>起始日</label><input type="date" id="p-start" value="2023-01-01"/></div>
-            <div class="param-field"><label>結束日</label><input type="date" id="p-end" value="2026-12-31"/></div>
+            <div class="param-field"><label>α 調升幅度</label><input type="number" id="p-alpha" value="1.0" step="0.1"/></div>
+            <div class="param-field"><label>β 分析師數</label><input type="number" id="p-beta" value="1.0" step="0.1"/></div>
           </div>
-        </fieldset>
+          <div class="param-field"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
+        </div>
 
-        <fieldset>
-          <legend>進場篩選</legend>
-          <div class="param-field"><label>最低目標價調升幅度 (%)</label><input type="number" id="p-minUpgrade" value="3.0" step="0.5"/></div>
-          <div class="param-field"><label>最低分析師人數</label><input type="number" id="p-minAnalyst" value="3" step="1"/></div>
-          <div class="param-field"><label>最低上漲空間 (%)</label><input type="number" id="p-minUpside" value="0" step="1"/></div>
-          <div class="param-field">
-            <label>上漲空間算法</label>
-            <select id="p-upsideFormula">
-              <option value="price">股價版：(新目標價-進場價)/進場價</option>
-              <option value="change">目標價版：(新目標價-舊目標價)/舊目標價</option>
-            </select>
-          </div>
-        </fieldset>
+        <div class="param-field">
+          <label>上漲空間算法</label>
+          <select id="p-upsideFormula">
+            <option value="price">股價版：(新目標價−進場價)/進場價</option>
+            <option value="change">目標價版：(新目標價−舊目標價)/舊目標價</option>
+          </select>
+        </div>
 
-        <fieldset>
-          <legend>出場規則</legend>
-          <div class="param-field"><label>最長持有交易日</label><input type="number" id="p-maxHold" value="60" step="5"/></div>
-          <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>分析師調降時出場</label></div>
-          <div class="param-field checkbox"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時出場</label></div>
-        </fieldset>
+        <div class="param-field">
+          <label>歷史平均加碼規則</label>
+          <select id="p-avgRule">
+            <option value="none">不使用</option>
+            <option value="tier3">高於平均加碼 / 低於平均維持</option>
+          </select>
+        </div>
+        <div class="param-field"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1"/></div>
 
-        <fieldset>
-          <legend>資金配置</legend>
-          <div class="param-field">
-            <label>配置方式</label>
-            <select id="p-sizing">
-              <option value="equal">等權</option>
-              <option value="by_upgrade">依調升幅度</option>
-              <option value="composite">綜合分數 (α/β/γ)</option>
-              <option value="multifactor" disabled>第二代多因子（即將推出）</option>
-            </select>
-          </div>
-          <div id="composite-params" style="display:none;">
-            <div class="param-row2">
-              <div class="param-field"><label>α 調升幅度</label><input type="number" id="p-alpha" value="1.0" step="0.1"/></div>
-              <div class="param-field"><label>β 分析師數</label><input type="number" id="p-beta" value="1.0" step="0.1"/></div>
-            </div>
-            <div class="param-field"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
-          </div>
-          <div class="param-field"><label>單檔最大權重 (%)</label><input type="number" id="p-maxWeight" value="20" step="5"/></div>
-          <div class="param-field"><label>最多持有檔數 (0=不限)</label><input type="number" id="p-maxPositions" value="10" step="1"/></div>
-          <div class="param-field"><label>投組總曝險上限 (%)</label><input type="number" id="p-maxExposure" value="100" step="5"/></div>
-        </fieldset>
+        <div class="param-field">
+          <label>成交價格</label>
+          <select id="p-fillPrice">
+            <option value="close">下一交易日收盤</option>
+            <option value="open" disabled>下一交易日開盤（資料尚未支援）</option>
+          </select>
+        </div>
 
-        <fieldset>
-          <legend>歷史平均加碼規則</legend>
-          <div class="param-field">
-            <label>規則</label>
-            <select id="p-avgRule">
-              <option value="none">不使用</option>
-              <option value="tier3">高於平均加碼 / 低於平均維持</option>
-            </select>
-          </div>
-          <div class="param-field"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1"/></div>
-        </fieldset>
+        <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>目標價調降時賣出</label></div>
+        <div class="param-field checkbox" style="margin-bottom:16px;"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時賣出</label></div>
 
-        <fieldset>
-          <legend>成交價</legend>
-          <div class="param-field">
-            <label>下一交易日成交價</label>
-            <select id="p-fillPrice">
-              <option value="close">收盤價</option>
-              <option value="open" disabled>開盤價（資料尚未支援）</option>
-            </select>
-          </div>
-        </fieldset>
+        <button class="btn block" id="run-btn"><span>▶</span>執行回測</button>
 
-        <button class="btn" id="run-btn">執行回測</button>
+        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:12px 0 0;">第一版僅使用同篇新聞直接揭露的新舊目標價，不納入EPS串聯紀錄；交易成本暫設為0。</p>
       </div>
 
       <div>
-        <!-- ===== 手動回測 ===== -->
-        <div class="mode-pane active" id="pane-manual">
-          <div id="result-area-manual"></div>
+        <div id="card-row-holder"></div>
+        <div id="coverage-holder"></div>
+        <div class="chart-panel">
+          <div class="eyebrow-row"><span class="eyebrow">Arithmetic Return Curve</span></div>
+          <div class="block-title" style="margin-left:0;">每日報酬累加 vs. 大盤</div>
+          <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>收盤成交</span><span><span class="sw" style="background:var(--accent);"></span>開盤成交</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
+          <div id="curve-holder"></div>
         </div>
 
-        <!-- ===== 嚴格驗證模式 ===== -->
-        <div class="mode-pane" id="pane-strict">
-          <div class="warn-banner">
-            <span>🔒</span>
-            <div><b>嚴格驗證流程：</b>先在訓練期(2023-2024)網格搜尋最佳參數，再把「同一組參數」原封不動套用到驗證期(2025)——只回答一個問題：這組參數對沒被用來選參數的資料還有沒有效。2026測試期須手動點擊才會揭露，避免不小心用測試期反覆調參。</div>
+        <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
+        <section class="section-card accent-safe">
+          <div class="section-head">
+            <div><span class="eyebrow">Out-of-Sample Optimization</span><h3>參數自動最佳化</h3></div>
+            <button class="btn safe small" id="strict-search-btn">重新載入嚴格驗證結果</button>
           </div>
-          <button class="btn secondary" id="strict-search-btn" style="width:auto; padding:9px 18px;">在訓練期搜尋最佳參數</button>
-          <div id="strict-result"></div>
-        </div>
-
-        <!-- ===== 歷史探索模式 ===== -->
-        <div class="mode-pane" id="pane-explore">
-          <div class="warn-banner">
-            <span>⚠️</span>
-            <div><b>樣本內結果，不代表可交易。</b>這個模式直接對全部歷史區間搜尋「事後看起來最好」的參數組合，用來探索策略空間、找靈感，<b>不是</b>經過驗證的可交易規則。要知道某組參數是否真的有效，請用左邊「嚴格驗證模式」。</div>
-          </div>
-          <button class="btn secondary" id="explore-search-btn" style="width:auto; padding:9px 18px;">搜尋歷史最佳參數組合</button>
-          <div id="explore-result"></div>
-        </div>
-
-        <section>
-          <h2 class="section-label">配置公式說明</h2>
-          <div class="panel explainer">
-            <p><b>等權</b>：候選股票平分資金，最簡單也最不倚賴模型假設。</p>
-            <span class="formula">weight(i) = 1 / N</span>
-            <p><b>依調升幅度</b>：調升幅度越大分到的資金越多。</p>
-            <span class="formula">weight(i) ∝ max(調升幅度%, 0.01)</span>
-            <p><b>綜合分數</b>：調升幅度、分析師人數、上漲空間各自取指數(α/β/γ)後相乘，可調整三者的相對重要性。</p>
-            <span class="formula">score(i) = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
-            <p><b>第二代多因子</b>（即將推出）：異常調升程度(z分數) × log(分析師數) × 上漲空間 × 相對動能 × 連續上修次數 ÷ 個股波動率，把「這次調升相對這檔股票自己過去有多罕見」也納入評分。</p>
-            <p style="margin-top:10px;">上述任一分數算出後，若啟用「歷史平均加碼規則」，本次調升幅度或分析師數<b>高於</b>該股歷史平均會再乘上加碼倍數；<b>低於</b>平均則維持原分數，不加碼也不排除。單檔權重會被裁到「單檔最大權重」上限，整體曝險會被裁到「投組總曝險上限」。</p>
-          </div>
+          <p class="section-sub">2023–2024 訓練、2025 驗證、2026 保留測試；保留期不參與選參數。</p>
+          <div id="strict-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
         </section>
+
+        <!-- ===== IN-SAMPLE EXPLORATION ===== -->
+        <section class="section-card accent-caution">
+          <div class="section-head">
+            <div><span class="eyebrow">In-Sample Exploration</span><h3>歷史最佳策略探索</h3></div>
+            <button class="btn caution small" id="explore-search-btn">載入歷史探索結果</button>
+          </div>
+          <p class="section-sub">直接搜尋 2023 至今最高超額報酬；只能回答歷史上是否存在，不能證明未來有效。</p>
+          <div id="explore-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
+        </section>
+
+        <!-- ===== DAILY LEDGER ===== -->
+        <section class="section-card" id="ledger-section" style="display:none;">
+          <div class="section-head">
+            <div><span class="eyebrow">Daily Ledger</span><h3>每日資金、持股與買賣</h3></div>
+          </div>
+          <div class="ledger-controls">
+            <label>交易日期</label>
+            <select id="ledger-date-select" class="mono"></select>
+            <button class="btn secondary small" id="ledger-latest-btn">跳到最新交易日</button>
+            <button class="btn secondary small" id="ledger-csv-btn">匯出每日 CSV</button>
+          </div>
+          <div class="capital-row">
+            <div class="param-field"><label>實際執行資金（元）</label><input type="number" id="p-capital" value="10000000" step="100000"/></div>
+          </div>
+          <div id="ledger-detail"></div>
+        </section>
+
+        <div class="panel explainer" style="margin-bottom:0;">
+          <div class="eyebrow-row"><span class="eyebrow">Methodology Notes</span></div>
+          <p style="margin-top:10px;">會計方法採<b>每日固定資本平帳</b>：每天以本金100為基準結算，獲利抽回、虧損補入，隔日重新以100開始——權重不會因為股價變動而在日與日之間複利累加。策略與大盤都用「每日報酬率算術加總」呈現累積報酬，避免點位複利與報酬率相加口徑不一致導致的超額報酬計算錯誤。</p>
+        </div>
       </div>
     </div>
   </div>
+
+  <footer class="disclaimer-footer">
+    回測聲明：本工具用於研究公開新聞訊號，不構成投資建議。第一版未計交易成本、滑價與成交量限制；歷史最佳參數不代表未來績效。
+  </footer>
 </div>
 
 <div class="chart-tooltip" id="tooltip"></div>
@@ -346,6 +453,7 @@ async function sbFetchAll(path, params) {
 let DATES = [], dateIdxMap = new Map(), PRICES = {}, TAIEX = [];
 let STOCK_RET = {}, TAIEX_RET = [];
 let EV_UP = [], DOWN_BY_DATE = new Map();
+let RAW_UP_COUNT = 0;
 
 function bisectRight(arr, x) {
   let lo = 0, hi = arr.length;
@@ -378,6 +486,7 @@ function prepareEvents(events) {
   const up = events.filter(e => e.direction === 'UP')
     .slice()
     .sort((a, b) => (a.ticker === b.ticker ? a.date.localeCompare(b.date) : a.ticker.localeCompare(b.ticker)));
+  RAW_UP_COUNT = up.length;
   const histByTicker = new Map();
   const out = [];
   for (const e of up) {
@@ -457,7 +566,7 @@ async function loadAll() {
   EV_UP = prepareEvents(events);
   DOWN_BY_DATE = buildDownByDate(events);
 
-  document.getElementById('updated-at').textContent = `資料至 ${DATES[DATES.length - 1]}`;
+  document.getElementById('updated-at').textContent = DATES[DATES.length - 1];
 }
 
 // ============================================================================
@@ -489,7 +598,7 @@ function scoreOne(c, p) {
   return Math.max(base, 0);
 }
 
-// scoresArr: [{ticker,score,ref}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
+// scoresArr: [{ticker,score}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
 function allocateWeights(scoresArr, p) {
   const sumAll = scoresArr.reduce((s, x) => s + x.score, 0);
   if (sumAll <= 0) return new Map();
@@ -584,20 +693,27 @@ function runBacktest(p, startDate, endDate) {
       }
     }
 
-    // --- 當日報酬 ---
+    // --- 當日報酬 + 個股歸因 ---
     let dailyRet = 0;
+    const attribution = [];
     for (const [t, h] of holdings) {
       const r = STOCK_RET[t] ? STOCK_RET[t][i] : null;
+      const priceArr = PRICES[t];
+      const priceEnd = priceArr ? priceArr[i] : null;
+      const priceStart = priceArr && i > 0 ? priceArr[i - 1] : null;
       if (r != null) dailyRet += h.weight * r;
+      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target });
     }
     const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
 
     rows.push({
       idx: i, date: day,
-      holdings: [...holdings.entries()].map(([t, h]) => ({ ticker: t, weight: h.weight })),
+      holdings: [...holdings.entries()].map(([t, h]) => ({ ticker: t, weight: h.weight, target: h.target })),
+      attribution,
       nPositions: holdings.size,
       dailyReturn: dailyRet, taiexReturn: taiexRet,
       buys: buysToday, sells: sellsToday,
+      sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
     });
   }
 
@@ -649,7 +765,7 @@ function summarize(rows, trades) {
 }
 
 // ============================================================================
-// 參數讀取 / UI
+// 參數讀取 / 格式化
 // ============================================================================
 
 function readParams() {
@@ -678,30 +794,60 @@ document.getElementById('p-sizing').addEventListener('change', (e) => {
   document.getElementById('composite-params').style.display = e.target.value === 'composite' ? '' : 'none';
 });
 
-document.querySelectorAll('#mode-tabs .tabbtn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#mode-tabs .tabbtn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.mode-pane').forEach(p => p.classList.remove('active'));
-    document.getElementById(`pane-${btn.dataset.mode}`).classList.add('active');
-  });
-});
-
 const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
 const fmtNum2 = (v, digits = 2) => v == null ? '—' : v.toFixed(digits);
+const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', composite: '原始綜合分數', multifactor: '第二代多因子' };
 
-function renderCards(container, summary, extraLabel) {
+// ============================================================================
+// 上方摘要卡片 / 資料涵蓋度
+// ============================================================================
+
+function renderCards(summary, bestExcessInfo) {
+  const container = document.getElementById('card-row-holder');
   if (!summary) { container.innerHTML = '<div class="empty-state" style="padding:30px;">這段區間沒有符合條件的交易，無法產生結果。</div>'; return; }
   container.innerHTML = `
     <div class="card-row">
-      <div class="stat-card"><div class="label">收盤策略累積報酬${extraLabel || ''}</div><div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div><div class="sub">${summary.tradingDays} 個交易日 · ${summary.nTrades} 筆交易</div></div>
-      <div class="stat-card"><div class="label">開盤策略累積報酬</div><div class="value" style="color:var(--ink-faint);">資料尚未支援</div><div class="sub">尚未抓取開盤價</div></div>
-      <div class="stat-card"><div class="label">大盤(TAIEX)累積報酬</div><div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div><div class="sub">同一算術加總口徑</div></div>
-      <div class="stat-card"><div class="label">超額報酬</div><div class="value ${summary.excessReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div><div class="sub">Sharpe ${fmtNum2(summary.sharpe)} · MDD ${fmtPct(summary.maxDrawdownPct)}</div></div>
+      <div class="stat-card">
+        <div class="label">收盤成交策略</div>
+        <div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div>
+        <div class="sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(summary.sharpe)} · 回撤 ${fmtPct(summary.maxDrawdownPct)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">開盤成交策略</div>
+        <div class="value muted">—</div>
+        <div class="sub">未執行此版本</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">台股加權指數</div>
+        <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
+        <div class="sub">每日報酬相加 · 同一算術口徑</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">最佳版本超額報酬</div>
+        <div class="value ${bestExcessInfo && bestExcessInfo.excess >= 0 ? 'up' : 'down'}">${bestExcessInfo ? fmtPct(bestExcessInfo.excess) : '—'}</div>
+        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}</div>
+      </div>
     </div>`;
 }
 
-function renderCurve(container, rows) {
+function renderCoverage() {
+  const container = document.getElementById('coverage-holder');
+  const tickerCount = Object.keys(PRICES).length;
+  let priceDayCount = 0;
+  for (const arr of Object.values(PRICES)) for (const v of arr) if (v != null) priceDayCount++;
+  const validEvents = EV_UP.length;
+  const unmatched = RAW_UP_COUNT - EV_UP.length;
+  container.innerHTML = `
+    <div class="coverage-strip">
+      <div class="coverage-item"><div class="label">行情涵蓋</div><div class="value mono">${tickerCount}/${tickerCount} 檔 · ${priceDayCount.toLocaleString()} 日行情</div></div>
+      <div class="coverage-item"><div class="label">有效新聞事件</div><div class="value mono">${validEvents.toLocaleString()}</div></div>
+      <div class="coverage-item"><div class="label">無法配對事件</div><div class="value mono">${unmatched.toLocaleString()}</div></div>
+      <div class="coverage-item"><div class="label">會計方法</div><div class="value">每日固定資本平帳</div></div>
+    </div>`;
+}
+
+function renderCurve(rows) {
+  const container = document.getElementById('curve-holder');
   if (!rows.length) { container.innerHTML = ''; return; }
   const W = 900, H = 300, padL = 46, padR = 16, padT = 14, padB = 22;
   const vals = rows.flatMap(r => [r.cumReturn * 100, r.cumTaiex * 100]);
@@ -713,8 +859,8 @@ function renderCurve(container, rows) {
   const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
 
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), ink = cssVar('--ink');
-  const accent = cssVar('--accent');
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const upColor = cssVar('--up');
 
   let gridLines = '';
   for (let i = 0; i <= 3; i++) {
@@ -733,9 +879,12 @@ function renderCurve(container, rows) {
   container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
     ${gridLines}
     <path d="${taiexPath}" fill="none" stroke="${inkFaint}" stroke-width="2" stroke-linejoin="round"/>
-    <path d="${stratPath}" fill="none" stroke="${accent}" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="${stratPath}" fill="none" stroke="${upColor}" stroke-width="2.4" stroke-linejoin="round"/>
     <rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" id="${svgId}-hit"/>
-  </svg>`;
+  </svg>
+  <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--ink-faint); margin-top:4px;">
+    <span>${rows[0].date}</span><span>${rows[Math.floor(rows.length/2)].date}</span><span>${rows[rows.length-1].date}</span>
+  </div>`;
 
   const svg = document.getElementById(svgId);
   const hit = document.getElementById(`${svgId}-hit`);
@@ -745,7 +894,7 @@ function renderCurve(container, rows) {
     const relX = (evt.clientX - rect.left) / rect.width * W;
     const i = Math.max(0, Math.min(rows.length - 1, Math.round((relX - padL) / (W - padL - padR) * (rows.length - 1))));
     const r = rows[i];
-    showTip(evt, `<b>${r.date}</b><br/>策略：<b>${fmtPct(r.cumReturn * 100)}</b><br/>大盤：<b>${fmtPct(r.cumTaiex * 100)}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b><br/>持股數：${r.nPositions}`);
+    showTip(evt, `<b>${r.date}</b><br/>收盤成交：<b>${fmtPct(r.cumReturn * 100)}</b><br/>開盤成交：<span style="color:var(--ink-faint);">未執行</span><br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b>`);
   });
   hit.addEventListener('mouseleave', hideTip);
 }
@@ -759,106 +908,218 @@ function showTip(evt, html) {
 }
 function hideTip() { tooltipEl.style.display = 'none'; }
 
-function renderDailyBook(container, rows) {
-  if (!rows.length) { container.innerHTML = ''; return; }
-  const wrapId = 'book' + Math.random().toString(36).slice(2, 9);
-  container.innerHTML = `
-    <div class="panel" style="margin-top:4px;">
-      <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
-        <label style="font-size:12px; color:var(--ink-dim); font-weight:600;">每日帳本 · 選擇日期</label>
-        <select id="${wrapId}-select" class="mono" style="font-size:12.5px; padding:6px 10px; border-radius:8px; border:1px solid var(--border); background:var(--panel-2); color:var(--ink);"></select>
-      </div>
-      <div id="${wrapId}-detail"></div>
-    </div>`;
-  const sel = document.getElementById(`${wrapId}-select`);
+// ============================================================================
+// 每日帳本(Daily Ledger)：開盤操作清單、當日說明、持股/買賣、個股歸因、CSV匯出
+// ============================================================================
+let CURRENT_ROWS = [];
+
+function lotsFor(weight, capital, price) {
+  if (price == null || price <= 0) return null;
+  return Math.floor((weight * capital) / price / 1000) * 1000;
+}
+
+function buildDailyExplanation(r, prevRow) {
+  const sizing = sizingLabelMap[r.sizingLabel] || r.sizingLabel;
+  const capLine = r.maxPositions > 0
+    ? (r.holdings.length <= r.maxPositions
+        ? `新訊號進場當天最多同時按分數留下前 ${r.maxPositions} 檔新標的`
+        : `新訊號進場當天最多新增前 ${r.maxPositions} 檔，已持有部位不會因排名下滑而被強制出場`)
+    : '不限持股數';
+  const holdingsSorted = r.holdings.slice().sort((a, b) => b.weight - a.weight);
+  const top = holdingsSorted.slice(0, 4).map(h => `${h.ticker} ${(h.weight * 100).toFixed(2)}%`).join('、');
+  const nBuy = r.buys.length, nSell = r.sells.length;
+  const dailyPct = fmtPct(r.dailyReturn * 100);
+  const flow = r.dailyReturn >= 0 ? `提領 ${(r.dailyReturn * 100).toFixed(2)}%` : `補入 ${(-r.dailyReturn * 100).toFixed(2)}%`;
+  if (r.holdings.length === 0) {
+    return `${r.date} 目前無符合條件的持股。`;
+  }
+  return `${r.date} 採用「${sizing}」，${capLine}，並將單檔權重限制在 ${(r.maxWeightPerStock * 100).toFixed(0)}%。收盤後共持有 ${r.holdings.length} 檔，主要為 ${top}。當日訊號或再平衡交易為買進 ${nBuy} 筆、賣出 ${nSell} 筆；當日報酬 ${dailyPct}，${flow}，隔日再以標準資本100開始。`;
+}
+
+function renderLedger(rows) {
+  CURRENT_ROWS = rows;
+  const section = document.getElementById('ledger-section');
+  if (!rows.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  const sel = document.getElementById('ledger-date-select');
+  sel.innerHTML = '';
   rows.forEach((r, i) => {
     const opt = document.createElement('option');
     opt.value = i; opt.textContent = r.date;
     sel.appendChild(opt);
   });
   sel.selectedIndex = rows.length - 1;
-  const detail = document.getElementById(`${wrapId}-detail`);
-  const render = () => {
-    const r = rows[Number(sel.value)];
-    const holdingsRows = r.holdings.map(h => `<tr><td class="mono">${h.ticker}</td><td class="mono">${(h.weight * 100).toFixed(1)}%</td></tr>`).join('');
-    const buySellRows = [
-      ...r.buys.map(b => `<tr><td><span class="tag buy">買進</span></td><td class="mono">${b.ticker}</td><td class="mono">${b.price != null ? b.price.toFixed(2) : '—'}</td><td class="mono">${(b.weight * 100).toFixed(1)}%</td><td>新進訊號</td></tr>`),
-      ...r.sells.map(s => `<tr><td><span class="tag sell">賣出</span></td><td class="mono">${s.ticker}</td><td class="mono">—</td><td class="mono">—</td><td>${s.reason}</td></tr>`),
-    ].join('') || '<tr><td colspan="5" style="color:var(--ink-faint);">今日無買賣</td></tr>';
-    const totalExposure = r.holdings.reduce((s, h) => s + h.weight, 0) * 100;
-    detail.innerHTML = `
-      <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
-        <div class="stat-card"><div class="label">當日報酬</div><div class="value ${r.dailyReturn >= 0 ? 'up' : 'down'}" style="font-size:16px;">${fmtPct(r.dailyReturn * 100)}</div></div>
-        <div class="stat-card"><div class="label">累積報酬</div><div class="value ${r.cumReturn >= 0 ? 'up' : 'down'}" style="font-size:16px;">${fmtPct(r.cumReturn * 100)}</div></div>
-        <div class="stat-card"><div class="label">市場曝險</div><div class="value" style="font-size:16px;">${totalExposure.toFixed(1)}%</div></div>
-        <div class="stat-card"><div class="label">提領/補入金額(以本金100計)</div><div class="value ${r.dailyReturn >= 0 ? 'up' : 'down'}" style="font-size:16px;">${(r.dailyReturn * 100).toFixed(2)}</div></div>
-      </div>
+  sel.onchange = renderLedgerDetail;
+  document.getElementById('ledger-latest-btn').onclick = () => { sel.selectedIndex = rows.length - 1; renderLedgerDetail(); };
+  document.getElementById('p-capital').oninput = renderLedgerDetail;
+  document.getElementById('ledger-csv-btn').onclick = exportCsv;
+  renderLedgerDetail();
+}
+
+function renderLedgerDetail() {
+  const rows = CURRENT_ROWS;
+  const sel = document.getElementById('ledger-date-select');
+  const idx = Number(sel.value);
+  const r = rows[idx];
+  const prevRow = idx > 0 ? rows[idx - 1] : null;
+  const capital = Number(document.getElementById('p-capital').value) || 0;
+  const detail = document.getElementById('ledger-detail');
+
+  const prevLots = new Map();
+  if (prevRow) prevRow.holdings.forEach(h => prevLots.set(h.ticker, lotsFor(h.weight, capital, PRICES[h.ticker] ? PRICES[h.ticker][prevRow.idx] : null)));
+
+  const holdingsRows = r.attribution.slice().sort((a, b) => b.weight - a.weight).map(a => {
+    const lots = lotsFor(a.weight, capital, a.priceEnd);
+    const space = (a.target != null && a.priceEnd != null && a.priceEnd > 0) ? ((a.target - a.priceEnd) / a.priceEnd * 100) : null;
+    return `<tr><td><b>${a.ticker}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
+  }).join('');
+
+  const buySellRows = [
+    ...r.buys.map(b => `<tr><td><span class="tag buy">買進</span></td><td><b>${b.ticker}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td>符合調升條件</td></tr>`),
+    ...r.sells.map(s => {
+      const priceArr = PRICES[s.ticker];
+      const exitP = priceArr ? priceArr[r.idx] : null;
+      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${s.ticker}</b></td><td class="mono">${exitP != null ? exitP.toLocaleString() : '—'}</td><td class="mono">—</td><td>${s.reason}</td></tr>`;
+    }),
+  ].join('') || '<tr><td colspan="5" style="color:var(--ink-faint);">今日無買賣</td></tr>';
+
+  const attributionRows = r.attribution.slice().sort((a, b) => (b.contribution || 0) - (a.contribution || 0)).map(a => `
+    <tr>
+      <td><b>${a.ticker}</b></td>
+      <td style="color:var(--ink-faint);">收盤至收盤</td>
+      <td class="mono">${fmtPct(a.weight * 100)}</td>
+      <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
+      <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
+      <td class="mono ${a.ret != null && a.ret >= 0 ? 'up' : 'down'}" style="color:${a.ret != null ? (a.ret >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${a.ret != null ? fmtPct(a.ret * 100) : '—'}</td>
+      <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
+
+  const totalExposure = r.holdings.reduce((s, h) => s + h.weight, 0) * 100;
+  const flowLabel = r.dailyReturn >= 0 ? '提領' : '補入';
+  const flowVal = Math.abs(r.dailyReturn * 100).toFixed(2);
+
+  detail.innerHTML = `
+    <div class="brief-panel">
+      <div class="brief-eyebrow">Trader Opening Brief</div>
+      <h4>當日開盤操作清單</h4>
+      <div class="brief-line">${r.date} 目前查看收盤成交版本；開盤成交版本尚未支援（無開盤價資料）。</div>
+      <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「張數」欄位依當日收盤價換算整股（1張=1,000股，無條件捨去）。</div>
+      ${r.buys.length === 0 && r.sells.length === 0 ? '<div class="brief-line">收盤版本今日無再平衡交易。</div>' : ''}
+      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。訊號於前一交易日新聞公開後形成，隔日以收盤價執行。</div>
+    </div>
+
+    <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
+      <div class="stat-card"><div class="label">當日報酬</div><div class="value ${r.dailyReturn >= 0 ? 'up' : 'down'}" style="font-size:18px;">${fmtPct(r.dailyReturn * 100)}</div></div>
+      <div class="stat-card"><div class="label">累積報酬</div><div class="value ${r.cumReturn >= 0 ? 'up' : 'down'}" style="font-size:18px;">${fmtPct(r.cumReturn * 100)}</div></div>
+      <div class="stat-card"><div class="label">市場曝險</div><div class="value" style="font-size:18px;">${totalExposure.toFixed(1)}%</div></div>
+      <div class="stat-card"><div class="label">平帳資金流</div><div class="value ${r.dailyReturn >= 0 ? 'down' : 'up'}" style="font-size:18px;">${flowLabel} ${flowVal}%</div></div>
+    </div>
+
+    <div class="explain-block">
+      <div class="brief-eyebrow">Daily Explanation</div>
+      <h4>這一天如何配置與買賣？</h4>
+      <p>${buildDailyExplanation(r, prevRow)}</p>
+    </div>
+
+    <div class="two-col-tables">
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>持股</th><th>權重</th></tr></thead>
-          <tbody>${holdingsRows || '<tr><td colspan="2" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
+          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>張數</th></tr></thead>
+          <tbody>${holdingsRows || '<tr><td colspan="6" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
         </table>
       </div>
-      <div style="height:14px;"></div>
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>買賣</th><th>股票</th><th>成交價</th><th>權重</th><th>原因</th></tr></thead>
+          <thead><tr><th>動作</th><th>股票</th><th>成交價</th><th>權重變化</th><th>原因</th></tr></thead>
           <tbody>${buySellRows}</tbody>
         </table>
-      </div>`;
-  };
-  sel.addEventListener('change', render);
-  render();
+      </div>
+    </div>
+
+    <div class="eyebrow-row" style="margin-top:4px;"><span class="eyebrow">Position Return Attribution</span></div>
+    <div class="block-title" style="margin-left:0; font-size:15px;">個股當日報酬明細</div>
+    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股區間報酬；各列貢獻加總應等於策略當日總報酬。</p>
+    <div class="table-wrap" style="margin-bottom:18px;">
+      <table class="book-table">
+        <thead><tr><th>股票</th><th>持有區間</th><th>計算權重</th><th>起始價</th><th>結束價</th><th>個股報酬</th><th>策略貢獻</th></tr></thead>
+        <tbody>${attributionRows}</tbody>
+      </table>
+    </div>
+
+    <div class="eyebrow-row"><span class="eyebrow">History</span></div>
+    <div class="block-title" style="margin-left:0; font-size:15px;">每日帳本</div>
+    <div class="table-wrap">
+      <table class="book-table">
+        <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
+        <tbody>${rows.slice().reverse().slice(0, 60).map(rr => {
+          const exposure = rr.holdings.reduce((s, h) => s + h.weight, 0) * 100;
+          const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
+          return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>
+    <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">僅顯示最近 60 個交易日，完整資料請用「匯出每日 CSV」。</p>`;
 }
 
-function renderResult(container, rows, summary, extraLabel) {
-  const cardsDiv = document.createElement('div');
-  const chartPanel = document.createElement('div');
-  chartPanel.className = 'chart-panel';
-  const curveHolderId = 'curve-holder-' + Math.random().toString(36).slice(2, 9);
-  chartPanel.innerHTML = `<div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>策略(收盤)</span><span><span class="sw" style="background:var(--ink-faint);"></span>大盤(TAIEX)</span></div><div id="${curveHolderId}"></div>`;
-  const bookDiv = document.createElement('div');
-
-  container.innerHTML = '';
-  container.appendChild(cardsDiv);
-  container.appendChild(chartPanel);
-  container.appendChild(bookDiv);
-
-  renderCards(cardsDiv, summary, extraLabel);
-  if (rows.length) renderCurve(chartPanel.querySelector(`#${curveHolderId}`), rows);
-  renderDailyBook(bookDiv, rows);
+function exportCsv() {
+  const rows = CURRENT_ROWS;
+  if (!rows.length) return;
+  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '超額報酬', '持股數', '持股清單(ticker:weight%)'];
+  const lines = [header.join(',')];
+  rows.forEach(r => {
+    const holdingsStr = r.holdings.map(h => `${h.ticker}:${(h.weight * 100).toFixed(2)}`).join(';');
+    lines.push([
+      r.date,
+      (r.dailyReturn * 100).toFixed(4),
+      (r.taiexReturn * 100).toFixed(4),
+      (r.cumReturn * 100).toFixed(4),
+      (r.cumTaiex * 100).toFixed(4),
+      (r.excess * 100).toFixed(4),
+      r.nPositions,
+      `"${holdingsStr}"`,
+    ].join(','));
+  });
+  const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `strategy_daily_book_${rows[0].date}_${rows[rows.length - 1].date}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================================
-// 手動回測
+// 執行單次回測並更新整個上半部(卡片/涵蓋度/曲線/帳本)
 // ============================================================================
-document.getElementById('run-btn').addEventListener('click', () => {
+function runAndRenderManual(bestExcessInfo) {
   const p = readParams();
   const start = document.getElementById('p-start').value;
   const end = document.getElementById('p-end').value;
   const { rows, summary } = runBacktest(p, start, end);
-  renderResult(document.getElementById('result-area-manual'), rows, summary);
-  document.querySelectorAll('#mode-tabs .tabbtn').forEach(b => b.classList.remove('active'));
-  document.querySelector('#mode-tabs [data-mode="manual"]').classList.add('active');
-  document.querySelectorAll('.mode-pane').forEach(pn => pn.classList.remove('active'));
-  document.getElementById('pane-manual').classList.add('active');
-});
+  renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS);
+  renderCoverage();
+  renderCurve(rows);
+  renderLedger(rows);
+  return { rows, summary };
+}
+
+document.getElementById('run-btn').addEventListener('click', () => runAndRenderManual());
 
 // ============================================================================
-// 網格搜尋 (歷史探索模式 / 嚴格驗證模式共用)
+// 網格搜尋 (嚴格驗證模式 / 歷史探索模式共用)
 // ============================================================================
 function buildGrid(baseParams) {
   const grid = [];
-  const maxHoldOptions = [30, 60, 90];
+  const maxHoldOptions = [20, 60, 90];
   const maxPositionsOptions = [5, 10, 15];
-  const maxWeightOptions = [0.1, 0.2, 0.3];
   const sizingOptions = ['equal', 'by_upgrade', 'composite'];
   for (const maxHoldDays of maxHoldOptions) {
     for (const maxPositions of maxPositionsOptions) {
-      for (const maxWeightPerStock of maxWeightOptions) {
-        for (const sizingMode of sizingOptions) {
-          grid.push({ ...baseParams, maxHoldDays, maxPositions, maxWeightPerStock, sizingMode });
-        }
+      for (const sizingMode of sizingOptions) {
+        grid.push({ ...baseParams, maxHoldDays, maxPositions, sizingMode });
       }
     }
   }
@@ -877,42 +1138,39 @@ function runGridSearch(baseParams, start, end) {
 }
 
 function paramSummaryLabel(p) {
-  return `持有${p.maxHoldDays}天 · 上限${p.maxPositions}檔 · 單檔${(p.maxWeightPerStock * 100).toFixed(0)}% · ${{ equal: '等權', by_upgrade: '依調升幅度', composite: '綜合分數' }[p.sizingMode]}`;
+  return `調升 ≥ +${p.minUpgradePct.toFixed(2)}% · 分析師 ≥ ${p.minAnalystCount} · 上漲空間 ≥ ${(p.minUpside * 100).toFixed(2)}% · 前 ${p.maxPositions || '不限'} 檔 · 持有 ${p.maxHoldDays} 日 · ${sizingLabelMap[p.sizingMode]}`;
 }
 
-function renderGridTable(container, results, onPick) {
+function renderGridTable(container, results) {
   if (!results.length) { container.innerHTML = '<div class="empty-state" style="padding:20px;">這段區間找不到有效參數組合。</div>'; return; }
   const top = results.slice(0, 10);
   const rowsHtml = top.map((r, i) => `
-    <tr class="grid-result-row${i === 0 ? ' best' : ''}" data-i="${i}">
+    <tr class="grid-result-row${i === 0 ? ' best' : ''}">
       <td class="mono">${i + 1}</td>
-      <td>${paramSummaryLabel(r.params)}</td>
-      <td class="mono ${r.summary.excessReturnPct >= 0 ? 'up' : 'down'}" style="color:${r.summary.excessReturnPct >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.summary.excessReturnPct)}</td>
+      <td style="font-size:11.5px;">${paramSummaryLabel(r.params)}</td>
+      <td class="mono" style="color:${r.summary.excessReturnPct >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.summary.excessReturnPct)}</td>
       <td class="mono">${fmtPct(r.summary.totalReturnPct)}</td>
       <td class="mono">${fmtNum2(r.summary.sharpe)}</td>
       <td class="mono">${fmtPct(r.summary.maxDrawdownPct)}</td>
       <td class="mono">${r.summary.nTrades}</td>
     </tr>`).join('');
   container.innerHTML = `
-    <div class="table-wrap" style="margin-top:14px;">
+    <div class="table-wrap">
       <table class="book-table">
         <thead><tr><th>#</th><th>參數組合</th><th>超額報酬</th><th>總報酬</th><th>Sharpe</th><th>最大回撤</th><th>交易數</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
-    </div>
-    <p style="font-size:11px; color:var(--ink-faint); margin-top:8px;">點一列可把該組參數套用到左側面板並顯示完整結果。</p>`;
-  container.querySelectorAll('.grid-result-row').forEach(tr => {
-    tr.addEventListener('click', () => onPick(top[Number(tr.dataset.i)]));
-  });
+    </div>`;
 }
 
 function applyParamsToForm(p) {
   document.getElementById('p-maxHold').value = p.maxHoldDays;
   document.getElementById('p-maxPositions').value = p.maxPositions;
-  document.getElementById('p-maxWeight').value = p.maxWeightPerStock * 100;
   document.getElementById('p-sizing').value = p.sizingMode;
   document.getElementById('composite-params').style.display = p.sizingMode === 'composite' ? '' : 'none';
 }
+
+let LAST_BEST_EXCESS = null;
 
 document.getElementById('explore-search-btn').addEventListener('click', () => {
   const base = readParams();
@@ -920,28 +1178,27 @@ document.getElementById('explore-search-btn').addEventListener('click', () => {
   const end = document.getElementById('p-end').value;
   const results = runGridSearch(base, start, end);
   const out = document.getElementById('explore-result');
-  const tableHolder = document.createElement('div');
   out.innerHTML = '';
+  const tableHolder = document.createElement('div');
   out.appendChild(tableHolder);
-  const resultHolder = document.createElement('div');
-  out.appendChild(resultHolder);
-  renderGridTable(tableHolder, results, (picked) => {
-    applyParamsToForm(picked.params);
-    const { rows, summary } = runBacktest(picked.params, start, end);
-    renderResult(resultHolder, rows, summary, `（${start}~${end}，樣本內最佳）`);
+  renderGridTable(tableHolder, results);
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'disclaimer-bar';
+  disclaimer.textContent = `已完成 ${results.length} 組廣搜與細調，結果為樣本內事後最佳，不代表可交易；點列表任一列可套用到左側參數面板重跑手動回測。`;
+  out.appendChild(disclaimer);
+  tableHolder.querySelectorAll('.grid-result-row').forEach((tr, i) => {
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', () => { applyParamsToForm(results[i].params); runAndRenderManual(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   });
-  if (results.length) {
-    applyParamsToForm(results[0].params);
-    const { rows, summary } = runBacktest(results[0].params, start, end);
-    renderResult(resultHolder, rows, summary, `（${start}~${end}，樣本內最佳）`);
-  }
 });
 
 let strictLockedParams = null;
+
 document.getElementById('strict-search-btn').addEventListener('click', () => {
   const base = readParams();
   const trainStart = '2023-01-01', trainEnd = '2024-12-31';
   const validStart = '2025-01-01', validEnd = '2025-12-31';
+  const testStart = '2026-01-01', testEnd = document.getElementById('p-end').value;
   const trainResults = runGridSearch(base, trainStart, trainEnd);
   const out = document.getElementById('strict-result');
   if (!trainResults.length) {
@@ -950,58 +1207,75 @@ document.getElementById('strict-search-btn').addEventListener('click', () => {
   }
   const best = trainResults[0];
   strictLockedParams = best.params;
-  applyParamsToForm(best.params);
   const { summary: validSummary } = runBacktest(best.params, validStart, validEnd);
+  const { summary: testSummary } = runBacktest(best.params, testStart, testEnd);
+  const fullResult = runBacktest(best.params, '2023-01-01', testEnd);
+  LAST_BEST_EXCESS = { excess: fullResult.summary ? fullResult.summary.excessReturnPct : null, sub: `目前參數全期間 · 收盤版本 · ${fullResult.trades.length} 筆權重調整` };
 
   out.innerHTML = '';
-  const tableHolder = document.createElement('div');
-  out.appendChild(tableHolder);
-  renderGridTable(tableHolder, trainResults, () => {}); // 僅供檢視訓練期排名，不可切換(避免對驗證期反覆調參)
-
-  const compareDiv = document.createElement('div');
-  compareDiv.className = 'compare-row';
-  compareDiv.innerHTML = `
-    <div class="compare-card">
-      <h4>訓練期 2023-2024（用來挑參數）</h4>
-      <div class="row"><span>總報酬</span><b class="mono">${fmtPct(best.summary.totalReturnPct)}</b></div>
-      <div class="row"><span>超額報酬</span><b class="mono">${fmtPct(best.summary.excessReturnPct)}</b></div>
-      <div class="row"><span>Sharpe</span><b class="mono">${fmtNum2(best.summary.sharpe)}</b></div>
-      <div class="row"><span>最大回撤</span><b class="mono">${fmtPct(best.summary.maxDrawdownPct)}</b></div>
+  const recGrid = document.createElement('div');
+  recGrid.className = 'recommend-grid';
+  recGrid.innerHTML = `
+    <div class="recommend-card">
+      <h4>隔日收盤推薦 <span class="pill-badge safe">樣本外驗證</span></h4>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${best.summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(best.summary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(best.summary.totalTaiexReturnPct)} · 超額 ${fmtPct(best.summary.excessReturnPct)}</div></div>
+        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${validSummary && validSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(validSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(validSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(validSummary?.excessReturnPct)}</div></div>
+        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value ${testSummary && testSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(testSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(testSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(testSummary?.excessReturnPct)}</div></div>
+      </div>
+      <div class="param-summary-line">${paramSummaryLabel(best.params)}</div>
+      <div class="recommend-actions">
+        <button class="btn secondary small" id="btn-rec-close-test">只看 2026 最終測試</button>
+        <button class="btn secondary small" id="btn-rec-close-full">套用全期間</button>
+      </div>
     </div>
-    <div class="compare-card">
-      <h4>驗證期 2025（同一組參數，沒被用來選參數）</h4>
-      <div class="row"><span>總報酬</span><b class="mono">${fmtPct(validSummary?.totalReturnPct)}</b></div>
-      <div class="row"><span>超額報酬</span><b class="mono">${fmtPct(validSummary?.excessReturnPct)}</b></div>
-      <div class="row"><span>Sharpe</span><b class="mono">${fmtNum2(validSummary?.sharpe)}</b></div>
-      <div class="row"><span>最大回撤</span><b class="mono">${fmtPct(validSummary?.maxDrawdownPct)}</b></div>
+    <div class="recommend-card">
+      <h4>隔日開盤推薦 <span class="pill-badge safe">樣本外驗證</span></h4>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">未執行此版本</div></div>
+        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">未執行此版本</div></div>
+        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">未執行此版本</div></div>
+      </div>
+      <div class="param-summary-line">開盤成交需要開盤價資料，目前資料庫只有收盤價，尚未支援。</div>
+      <div class="recommend-actions">
+        <button class="btn secondary small" disabled>只看 2026 最終測試</button>
+        <button class="btn secondary small" disabled>套用全期間</button>
+      </div>
     </div>`;
-  out.appendChild(compareDiv);
+  out.appendChild(recGrid);
 
-  const testBtn = document.createElement('button');
-  testBtn.className = 'btn secondary';
-  testBtn.style.cssText = 'width:auto; padding:9px 18px; margin-top:14px;';
-  testBtn.textContent = '用鎖定參數驗證 2026 測試期（完全保留，只看一次）';
-  out.appendChild(testBtn);
-  const testResultDiv = document.createElement('div');
-  out.appendChild(testResultDiv);
-  testBtn.addEventListener('click', () => {
-    const { summary: testSummary } = runBacktest(strictLockedParams, '2026-01-01', '2026-12-31');
-    testResultDiv.innerHTML = `
-      <div class="compare-card" style="margin-top:12px; max-width:340px;">
-        <h4>測試期 2026（完全保留 · 只看這一次）</h4>
-        <div class="row"><span>總報酬</span><b class="mono">${fmtPct(testSummary?.totalReturnPct)}</b></div>
-        <div class="row"><span>超額報酬</span><b class="mono">${fmtPct(testSummary?.excessReturnPct)}</b></div>
-        <div class="row"><span>Sharpe</span><b class="mono">${fmtNum2(testSummary?.sharpe)}</b></div>
-        <div class="row"><span>最大回撤</span><b class="mono">${fmtPct(testSummary?.maxDrawdownPct)}</b></div>
-      </div>`;
-    testBtn.disabled = true;
-  });
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'disclaimer-bar';
+  disclaimer.textContent = '2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。';
+  out.appendChild(disclaimer);
 
-  const resultHolder = document.createElement('div');
-  out.appendChild(resultHolder);
-  const { rows } = runBacktest(best.params, trainStart, validEnd);
-  renderResult(resultHolder, rows, summarize(rows, []), '（訓練+驗證期完整曲線）');
+  const trainTableWrap = document.createElement('div');
+  trainTableWrap.style.marginTop = '16px';
+  trainTableWrap.innerHTML = '<p style="font-size:11px; color:var(--ink-faint); margin-bottom:8px;">訓練期(2023-2024)完整排名，僅供檢視，驗證期/測試期不可回頭調參：</p>';
+  const trainTable = document.createElement('div');
+  trainTableWrap.appendChild(trainTable);
+  renderGridTable(trainTable, trainResults);
+  out.appendChild(trainTableWrap);
+
+  document.getElementById('btn-rec-close-full').onclick = () => {
+    applyParamsToForm(best.params);
+    document.getElementById('p-start').value = '2023-01-01';
+    document.getElementById('p-end').value = testEnd;
+    runAndRenderManual(LAST_BEST_EXCESS);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  document.getElementById('btn-rec-close-test').onclick = () => {
+    applyParamsToForm(best.params);
+    document.getElementById('p-start').value = testStart;
+    document.getElementById('p-end').value = testEnd;
+    runAndRenderManual(LAST_BEST_EXCESS);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
 });
+
+let LAST_RUN_SUMMARY = null;
 
 // ============================================================================
 // 啟動
@@ -1011,6 +1285,10 @@ document.getElementById('strict-search-btn').addEventListener('click', () => {
     await loadAll();
     document.getElementById('loading-banner').style.display = 'none';
     document.getElementById('main-content').style.display = '';
+    document.getElementById('composite-params').style.display = '';
+    const { summary } = runAndRenderManual();
+    LAST_RUN_SUMMARY = summary;
+    document.getElementById('strict-search-btn').click();
   } catch (err) {
     document.getElementById('loading-banner').style.display = 'none';
     const banner = document.getElementById('error-banner');
