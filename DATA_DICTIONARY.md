@@ -12,11 +12,16 @@ ticker_industry_official (官方產業/市場別，獨立參照表)
 industry_alias           (舊產業文字對照，補ticker_industry_official涵蓋不到的)
 concept_map              (概念股分類，獨立參照表，many-to-many)
 
+stock_prices             (個股每日收盤價，策略回測用，見下方stock_prices/taiex_index說明)
+taiex_index              (台股加權指數每日收盤，策略回測的交易日曆基準)
+
 v_revisions_normalized   (view，把上面幾張表JOIN好，網站/研究都從這個view讀)
 v_unified_target_events  (view，正式的目標價方向/幅度分析從這個view讀，見下方第5點)
 v_eps_only_target_events (view，只用EPS內嵌目標價串成的序列，跟v_unified_target_events
                            同一套邏輯，差在資料來源範圍，用來做三方比較/驗證EPS通道本身準不準)
 v_data_dictionary        (view，整個資料庫的自我說明文件，下載資料前先查這個)
+get_strategy_price_bundle() (RPC function，把stock_prices/taiex_index打包成strategy.html
+                           要的{dates,tickers}精簡格式，一次呼叫取代287k列分頁抓取)
 ```
 
 ## factset_revisions（主表）
@@ -59,6 +64,17 @@ v_data_dictionary        (view，整個資料庫的自我說明文件，下載�
 - `source`欄位格式：`產業價值鏈資訊平台(位置:{子分類})，證券櫃檯買賣中心/臺灣證券交易所官方資料`——`concept`存的是28大類的上層產業別(例如「印刷電路板」「金融」「資通訊安全」)，細部位置存在source裡
 - 抓取腳本：`fetch_industry_chain.py`，原始資料存在`factset_data/industry_chain_map.json`
 - **這個維度取代了原本用IC設計(00947 ETF)代表value_chain的做法**——IC設計那49筆(ETF來源)還留著沒刪，跟這780筆(官方平台來源)共存，是同一dimension、不同source，可以並存不衝突
+
+## stock_prices / taiex_index（策略回測用股價與大盤）
+
+2026-07-28新增：把原本只存在本機的股價快照（`factset_data/prices_full.json`／`taiex_full.json`，本機檔案、不進git）搬進資料庫，原因是本機檔案沒辦法自動更新、也沒辦法讓別人接手（見下方版本記錄）。
+
+- `stock_prices`：`(ticker, date)`複合主鍵，`close`收盤價。來源yfinance，`.TW`/`.TWO`後綴依`ticker_industry_official.market_type`決定
+- `taiex_index`：`date`主鍵，`close`。來源yfinance `^TWII`，同時也是策略回測的交易日曆基準（哪些日子算交易日，看這張表有沒有資料，不是看股票本身）
+- **股票清單不是寫死的名單**：`update_stock_prices.py`每次執行都重新查`SELECT DISTINCT ticker FROM factset_revisions`，抓「歷史上出現過目標價/EPS修正新聞的所有ticker」，這樣清單永遠跟事件資料同步，不用手動維護
+- **更新方式**：GitHub Actions排程`.github/workflows/daily_prices.yml`，每天台灣時間15:00自動跑`update_stock_prices.py --days 10`（增量、有重疊也沒關係，upsert會覆蓋），用`SUPABASE_SERVICE_ROLE_KEY`這個repo secret寫入，完全不依賴任何人的本機電腦
+- **一次性全量回補**：2026-07-28執行`update_stock_prices.py --full`，回補2021-01-01至今，206檔追蹤股票中204檔成功（`2888`、`6288`兩檔查無資料，疑似已下市/更名，`3008`大立光第一次抓時遇到yfinance暫時性錯誤，已手動補回），共269,509筆股價、1,347筆TAIEX
+- **給前端的存取方式**：不要直接對`stock_prices`分頁查詢（287k列超過單次5000列上限），一律呼叫RPC `get_strategy_price_bundle()`，資料庫端已經把287k列打包成`{dates:[...], taiex_close:[...], tickers:{ticker:[...]}}`一次回傳，`strategy.html`就是這樣讀的
 
 ## 已知限制（做分析前務必知道）
 
@@ -107,3 +123,4 @@ v_data_dictionary        (view，整個資料庫的自我說明文件，下載�
 - **2026-07-21**：`industry_name`原始文字解析改為`ticker_industry_official`官方對照表，`v_revisions_normalized.industry_canonical`為正式產業欄位。
 - **2026-07-24**：`concept_map`新增「AI」(00962台新臺灣AI優息動能ETF，29檔)、「智能車供應鏈」(00901永豐台灣智能車供應鏈ETF，42檔)兩組主題分類，方法論與既有半導體/IC設計一致(官方ETF成分股權重揭露)。查過資安(00875成分股是全球公司、幾乎不含台股)、核能/鈾礦(台股無對應掛牌公司)，兩者都沒有品質相當的官方來源可用，暫不做，原因記在`fetch_concept_etf.py`。
 - **2026-07-24**：`concept_map`新增`dimension='value_chain'`的全量資料源——證券櫃檯買賣中心/臺灣證券交易所官方「產業價值鏈資訊平台」(ic.tpex.org.tw)，212/216檔追蹤股票查得到官方申報的產業鏈位置，共780筆，一次補齊過去ETF方法覆蓋不到的產業(金融10檔金控、傳產塑化鋼鐵、航運航空、PCB/被動元件/連接器供應鏈等)。抓取腳本`fetch_industry_chain.py`，是目前`concept_map`裡覆蓋率最高、最接近「全部205檔都做到」的分類來源。
+- **2026-07-28**：股價/大盤資料從本機快照(`factset_data/prices_full.json`等，本機檔案、不進git)搬進資料庫`stock_prices`/`taiex_index`兩張表，理由：本機檔案沒辦法自動更新，也沒辦法讓別人不靠原本那台電腦接手。新增`update_stock_prices.py`+GitHub Actions排程`daily_prices.yml`(每天台灣時間15:00自動增量更新，用repo secret的service_role key寫入，不依賴任何人的本機)，以及RPC函式`get_strategy_price_bundle()`給前端一次拉回287k列資料。`strategy.html`的股價來源已改讀這個RPC，`factset_data/strategy_prices.json`/`strategy_taiex.json`兩個靜態快照檔已停用並從git移除。

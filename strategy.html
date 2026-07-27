@@ -540,15 +540,17 @@ async function loadAll() {
     order: 'date.asc,id.asc',
   });
 
-  const [pricesRes, taiexRes] = await Promise.all([
-    fetch('factset_data/strategy_prices.json').then(r => { if (!r.ok) throw new Error(`strategy_prices.json讀取失敗:${r.status}`); return r.json(); }),
-    fetch('factset_data/strategy_taiex.json').then(r => { if (!r.ok) throw new Error(`strategy_taiex.json讀取失敗:${r.status}`); return r.json(); }),
-  ]);
+  // 股價/大盤資料改從Supabase的RPC一次拉回(取代舊的factset_data/strategy_*.json靜態快照)，
+  // 這樣資料來源只有一份、且更新完全靠GitHub Actions排程(update_stock_prices.py)，不依賴本機檔案。
+  const bundleUrl = new URL(`${SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle`);
+  const bundleRes = await fetch(bundleUrl, { method: 'POST', headers: { ...SB_HEADERS, 'Content-Type': 'application/json' }, body: '{}' });
+  if (!bundleRes.ok) throw new Error(`股價資料RPC讀取失敗: ${bundleRes.status}`);
+  const bundle = await bundleRes.json();
 
-  DATES = pricesRes.dates;
+  DATES = bundle.dates;
   dateIdxMap = new Map(DATES.map((d, i) => [d, i]));
-  PRICES = pricesRes.tickers;
-  TAIEX = taiexRes.close;
+  PRICES = bundle.tickers;
+  TAIEX = bundle.taiex_close;
 
   STOCK_RET = {};
   for (const [t, arr] of Object.entries(PRICES)) {
