@@ -309,12 +309,14 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
 
     entries_by_date = cands_all.groupby("entry_date")
 
-    for day in period_cal:
+    for day_idx, day in enumerate(period_cal):
         # --- 出場檢查(用「今天」是否有這檔股票的DOWN訊號來判斷，DOWN訊號來自完整events表) ---
         down_today = down_lookup(day)
         exited = []
         for t, h in holdings.items():
-            days_held = (day - h["entry_date"]).days
+            # 用交易日數(不是自然日數)算持有天數，不然遇到連假(如農曆春節)會被自然日差距
+            # 誤判成「超過最長持有天數」提早出場，跟「最長持有天數」這個UI標籤講的交易日不一致。
+            days_held = day_idx - h["entry_idx"]
             price_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
             reason = None
             if t in down_today:
@@ -348,7 +350,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                     if t in new_weights.index and new_weights[t] > 0:
                         row = todays[todays["ticker"] == t].iloc[0]
                         holdings[t] = {
-                            "weight": new_weights[t], "entry_date": day,
+                            "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
                             "entry_price": row["entry_price_used"], "target": row["new_target"],
                         }
                 for t in list(holdings.keys()):

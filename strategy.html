@@ -626,10 +626,6 @@ function allocateWeights(scoresArr, p) {
   return weights;
 }
 
-function calDaysBetween(d1, d2) {
-  return Math.round((new Date(d2 + 'T00:00:00Z') - new Date(d1 + 'T00:00:00Z')) / 86400000);
-}
-
 function runBacktest(p, startDate, endDate) {
   const startIdx = bisectLeft(DATES, startDate);
   const endIdx = bisectRight(DATES, endDate) - 1;
@@ -655,7 +651,9 @@ function runBacktest(p, startDate, endDate) {
     // --- 出場 ---
     const toExit = [];
     for (const [t, h] of holdings) {
-      const daysHeld = calDaysBetween(h.entryDate, day);
+      // 用交易日數(不是自然日數)算持有天數，不然遇到連假(如農曆春節)會被自然日差距
+      // 誤判成「超過最長持有天數」提早出場，跟「最長持有天數」這個UI標籤講的交易日不一致。
+      const daysHeld = i - h.entryIdx;
       const priceArr = PRICES[t];
       const priceNow = priceArr ? priceArr[i] : null;
       let reason = null;
