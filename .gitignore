@@ -14,6 +14,11 @@ mtd_ccc_backtest.py
 factset_data/*
 !factset_data/.gitkeep
 
+# strategy.html是靜態部署(GitHub Pages無後端)，股價/大盤資料要用git提交才能被fetch()讀到，
+# 跟其他factset_data/*不同，這兩個是網站執行時的必要依賴，不是純研究快取
+!factset_data/strategy_prices.json
+!factset_data/strategy_taiex.json
+
 # 網站build產物(由 factset_dashboard_v2.html 樣板注入資料產生)，不是原始碼
 factset_dashboard_v2_built.html
 
