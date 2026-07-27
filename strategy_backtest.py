@@ -122,13 +122,24 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
             return np.nan
         return ser.get(row["entry_date"], np.nan)
 
+    def entry_prev_close(row):
+        """進場前一天(訊號當天)收盤價，上漲空間(股價版)的基準——不用進場價本身，
+        因為進場價已經反映訊號公布後市場的反應，拿它當分母會低估真正的上漲空間。"""
+        ser = stock_price.get(row["ticker"])
+        if ser is None:
+            return np.nan
+        pos = calendar.get_loc(row["entry_date"])
+        if pos == 0:
+            return np.nan
+        return ser.get(calendar[pos - 1], np.nan)
+
     ev["entry_price_close"] = ev.apply(entry_price_close, axis=1)
     ev = ev.dropna(subset=["entry_price_close"]).copy()
     ev["entry_price_open"] = ev.apply(entry_price_open, axis=1)
+    ev["entry_prev_close"] = ev.apply(entry_prev_close, axis=1)
 
-    # 上漲空間兩種算法，收盤版/開盤版各自算一次(進場基準不同，上漲空間自然也不同)
-    ev["upside_price_close"] = (ev["new_target"] - ev["entry_price_close"]) / ev["entry_price_close"]
-    ev["upside_price_open"] = (ev["new_target"] - ev["entry_price_open"]) / ev["entry_price_open"]
+    # 上漲空間(股價版)固定用進場前一天收盤價當基準，跟實際成交用開盤/收盤無關
+    ev["upside_price"] = (ev["new_target"] - ev["entry_prev_close"]) / ev["entry_prev_close"]
     ev["upside_change"] = ev["target_change_pct"] / 100.0
 
     # 歷史平均：只用「這筆事件之前」該股票的調升幅度/分析師數(expanding shift(1))，
@@ -176,12 +187,10 @@ class StrategyParams:
 
 def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     entry_col = "entry_price_open" if p.fill_price == "open" else "entry_price_close"
-    if p.upside_formula == "price":
-        upside_col = "upside_price_open" if p.fill_price == "open" else "upside_price_close"
-    else:
-        upside_col = "upside_change"
+    upside_col = "upside_price" if p.upside_formula == "price" else "upside_change"
     mask = (
         ev[entry_col].notna()
+        & ev[upside_col].notna()
         & (ev["target_change_pct"] >= p.min_upgrade_pct)
         & (ev["analyst_count"] >= p.min_analyst_count)
         & (ev[upside_col] >= p.min_upside)
@@ -352,10 +361,14 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         holdings[t]["weight"] = new_weights[t]
 
         # --- 當日報酬(固定資本100，權重在持有期間不因股價變動而複利滾動) ---
+        # 收盤成交版本進場當天是收盤才成交，當天完全沒有部位曝險，報酬算0，隔天才開始計入
+        # (跟出場當天不計報酬是同一個道理，兩者都要排除)。
         daily_ret = 0.0
         for t, h in holdings.items():
-            is_entry_day = p.fill_price == "open" and h["entry_date"] == day
-            rser = stock_ret_open_entry.get(t) if is_entry_day else stock_ret.get(t)
+            is_entry_day = h["entry_date"] == day
+            if is_entry_day and p.fill_price == "close":
+                continue
+            rser = stock_ret_open_entry.get(t) if (is_entry_day and p.fill_price == "open") else stock_ret.get(t)
             if rser is None:
                 continue
             r = rser.get(day, np.nan)

@@ -329,7 +329,7 @@
         <div class="param-field">
           <label>上漲空間算法</label>
           <select id="p-upsideFormula">
-            <option value="price">股價版：(新目標價−進場價)/進場價</option>
+            <option value="price">股價版：(新目標價−昨日收盤價)/昨日收盤價</option>
             <option value="change">目標價版：(新目標價−舊目標價)/舊目標價</option>
           </select>
         </div>
@@ -504,6 +504,9 @@ function prepareEvents(events) {
     if (entryPriceClose == null) continue;
     const openArr = PRICES_OPEN[e.ticker];
     const entryPriceOpen = openArr ? openArr[entryIdx] : null;
+    // 上漲空間的「股價版」用進場前一天的收盤價(訊號當天收盤，還沒受進場成交價影響)當基準，
+    // 不用進場價本身——進場價已經反映了訊號公布後市場的反應，拿它當分母會低估真正的上漲空間。
+    const prevClose = entryIdx > 0 ? priceArr[entryIdx - 1] : null;
 
     if (!histByTicker.has(e.ticker)) histByTicker.set(e.ticker, []);
     const hist = histByTicker.get(e.ticker);
@@ -517,15 +520,14 @@ function prepareEvents(events) {
     const changeVal = Number(e.target_change_pct);
     const analystVal = Number(e.analyst_count);
     const newTarget = Number(e.new_target);
-    const upsidePriceClose = (newTarget - entryPriceClose) / entryPriceClose;
-    const upsidePriceOpen = entryPriceOpen != null ? (newTarget - entryPriceOpen) / entryPriceOpen : null;
+    const upsidePrice = prevClose != null ? (newTarget - prevClose) / prevClose : null;
     const upsideChange = changeVal / 100;
 
     out.push({
       ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],
       entryPriceClose, entryPriceOpen, newTarget,
       targetChangePct: changeVal, analystCount: analystVal,
-      upsidePriceClose, upsidePriceOpen, upsideChange, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
+      upsidePrice, upsideChange, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
     });
     hist.push({ change: changeVal, analyst: analystVal });
   }
@@ -601,9 +603,10 @@ async function loadAll() {
 function filterCandidates(cands, p) {
   const isOpen = p.fillPrice === 'open';
   const entryKey = isOpen ? 'entryPriceOpen' : 'entryPriceClose';
-  const upsideKey = p.upsideFormula === 'price' ? (isOpen ? 'upsidePriceOpen' : 'upsidePriceClose') : 'upsideChange';
+  // 上漲空間(股價版)固定用「進場前一天收盤價」當基準，跟實際成交用開盤/收盤無關。
+  const upsideKey = p.upsideFormula === 'price' ? 'upsidePrice' : 'upsideChange';
   return cands
-    .filter(c => c[entryKey] != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c[upsideKey] >= p.minUpside)
+    .filter(c => c[entryKey] != null && c[upsideKey] != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c[upsideKey] >= p.minUpside)
     .map(c => ({ ...c, upsideUsed: c[upsideKey], entryPriceUsed: c[entryKey] }));
 }
 
@@ -723,19 +726,24 @@ function runBacktest(p, startDate, endDate) {
     // --- 當日報酬 + 個股歸因 ---
     // 開盤成交版本：進場當天用「開盤買進→收盤」的報酬(不是完整一天的收盤對收盤)，
     // 因為訊號隔日開盤才成交，當天開盤前的價格變動沒有參與到；進場後第二天起跟收盤版一樣用逐日收盤對收盤。
-    // 出場當天不論哪個版本都不計入報酬(部位被移除、當天報酬未捕捉)，這是既有(已交叉驗證)收盤版方法論的既定簡化，開盤版沿用同一套，不另外處理。
+    // 收盤成交版本：進場當天是收盤才成交，當天完全沒有部位曝險，報酬算0，隔天才開始計入
+    // (跟出場當天不計報酬是同一個道理，兩者都要排除，之前只排除了出場日、漏了進場日)。
     let dailyRet = 0;
     const attribution = [];
     for (const [t, h] of holdings) {
-      const isEntryDay = p.fillPrice === 'open' && h.entryIdx === i;
-      const r = isEntryDay
+      const isEntryDay = h.entryIdx === i;
+      const isOpenEntryDay = p.fillPrice === 'open' && isEntryDay;
+      const isCloseEntryDay = p.fillPrice === 'close' && isEntryDay;
+      const r = isOpenEntryDay
         ? (STOCK_RET_OPEN_ENTRY[t] ? STOCK_RET_OPEN_ENTRY[t][i] : null)
+        : isCloseEntryDay
+        ? null
         : (STOCK_RET[t] ? STOCK_RET[t][i] : null);
       const priceArr = PRICES[t];
       const priceEnd = priceArr ? priceArr[i] : null;
-      const priceStart = isEntryDay ? (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null) : (priceArr && i > 0 ? priceArr[i - 1] : null);
+      const priceStart = isOpenEntryDay ? (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null) : (priceArr && i > 0 ? priceArr[i - 1] : null);
       if (r != null) dailyRet += h.weight * r;
-      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay });
+      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay: isOpenEntryDay, isCloseEntryDay });
     }
     const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
 
@@ -1046,7 +1054,7 @@ function renderLedgerDetail() {
   const attributionRows = r.attribution.slice().sort((a, b) => (b.contribution || 0) - (a.contribution || 0)).map(a => `
     <tr>
       <td><b>${a.ticker}</b></td>
-      <td style="color:var(--ink-faint);">${a.isEntryDay ? '開盤至收盤(進場日)' : '收盤至收盤'}</td>
+      <td style="color:var(--ink-faint);">${a.isEntryDay ? '開盤至收盤(進場日)' : a.isCloseEntryDay ? '收盤成交(進場日，當日不計報酬)' : '收盤至收盤'}</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
       <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
       <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
