@@ -60,7 +60,7 @@ def _fetch_all_events():
             f"{SUPABASE_URL}/rest/v1/v_unified_target_events",
             headers=SB_HEADERS,
             params={
-                "select": "ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count",
+                "select": "ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei",
                 "direction": "in.(UP,DOWN)", "order": "date.asc,id.asc",
                 "offset": str(offset), "limit": str(page_size),
             },
@@ -105,6 +105,15 @@ def next_trading_day(d: pd.Timestamp, calendar: pd.DatetimeIndex) -> Optional[pd
     return calendar[pos]
 
 
+def resolve_execution_date(d: pd.Timestamp, time_taipei, calendar: pd.DatetimeIndex) -> Optional[pd.Timestamp]:
+    """執行時間窗口規則：交易日以「09:00開盤」當分界，不是午夜。新聞在當天09:00以前
+    公布，當天開盤還來得及反應，用當天開盤價；09:00以後公布(或公布在非交易日)，
+    最早只能等下一個交易日開盤。這樣盤前新聞不會被多耽誤一整天。"""
+    if time_taipei is not None and time_taipei < "09:00:00" and d in calendar:
+        return d
+    return next_trading_day(d, calendar)
+
+
 # ----------------------------------------------------------------------------
 # 2. 事件表前處理：算出兩種上漲空間、歷史平均(給avg_rule跟異常調升因子用)
 # ----------------------------------------------------------------------------
@@ -113,8 +122,8 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
     ev = events[events["direction"] == "UP"].copy()
     ev = ev.sort_values(["ticker", "date"]).reset_index(drop=True)
 
-    # 固定用下一交易日開盤價進場，不分新聞公布時間點。
-    ev["entry_date"] = ev["date"].apply(lambda d: next_trading_day(d, calendar))
+    # 執行日依09:00開盤時間窗口規則決定，不再固定用下一交易日。
+    ev["entry_date"] = ev.apply(lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1)
     ev = ev.dropna(subset=["entry_date"]).copy()
 
     def entry_price_open(row):
@@ -413,9 +422,9 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
 
 
 def down_tickers_on_factory(ev_full: pd.DataFrame, calendar: pd.DatetimeIndex):
-    """跟進場邏輯用同一套紀律：調降訊號當天不能反應，用下一交易日當生效日。"""
+    """跟進場邏輯用同一套09:00執行時間窗口規則，生效日才會跟entry_date口徑一致。"""
     down = ev_full[ev_full["direction"] == "DOWN"].copy()
-    down["effective_date"] = down["date"].apply(lambda d: next_trading_day(d, calendar))
+    down["effective_date"] = down.apply(lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1)
     down = down.dropna(subset=["effective_date"])
     by_date = down.groupby("effective_date")["ticker"].apply(set).to_dict()
     return lambda d: by_date.get(d, set())

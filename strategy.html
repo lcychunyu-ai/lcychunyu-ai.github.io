@@ -478,9 +478,19 @@ function medianSkipNull(arr) {
   return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
 }
 
-// 進場時機規則(唯一策略)：不分新聞公布時間點，一律用下一交易日「開盤價」進場——
-// 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡，
-// 不會有「這則新聞要用收盤價、那則要用開盤價」的情況。
+// 執行時間窗口規則：交易日以「09:00開盤」當分界，不是午夜——新聞在當天09:00以前公布，
+// 當天開盤還來得及反應，用當天開盤價；09:00以後公布(或公布在非交易日)，最早只能等
+// 下一個交易日開盤。這樣盤前新聞不會被多耽誤一整天，跟實際交易員能做到的一致。
+function resolveExecutionIdx(dateStr, timeStr) {
+  if (timeStr != null && timeStr < '09:00:00') {
+    const idx = dateIdxMap.get(dateStr);
+    if (idx != null) return idx;
+  }
+  return nextTradingDayIdx(dateStr);
+}
+
+// 進場成交規則(唯一策略)：不分收盤/開盤版本，一律用執行日的「開盤價」進場——
+// 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
 function prepareEvents(events) {
   const up = events.filter(e => e.direction === 'UP')
     .slice()
@@ -489,7 +499,7 @@ function prepareEvents(events) {
   const histByTicker = new Map();
   const out = [];
   for (const e of up) {
-    const entryIdx = nextTradingDayIdx(e.date);
+    const entryIdx = resolveExecutionIdx(e.date, e.news_time_taipei);
     if (entryIdx == null) continue;
     const priceArr = PRICES[e.ticker];
     if (!priceArr) continue;
@@ -528,7 +538,7 @@ function prepareEvents(events) {
 function buildDownByDate(events) {
   const map = new Map();
   events.filter(e => e.direction === 'DOWN').forEach(e => {
-    const idx = nextTradingDayIdx(e.date);
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
     if (idx == null) return;
     if (!map.has(idx)) map.set(idx, new Set());
     map.get(idx).add(e.ticker);
@@ -538,7 +548,7 @@ function buildDownByDate(events) {
 
 async function loadAll() {
   const events = await sbFetchAll('v_unified_target_events', {
-    select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count',
+    select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei',
     direction: 'in.(UP,DOWN)',
     order: 'date.asc,id.asc',
   });
