@@ -1,6 +1,9 @@
 """
-每日排程用：抓個股收盤價+台股加權指數，upsert寫入Supabase的stock_prices/taiex_index。
+每日排程用：抓個股開盤價/收盤價+台股加權指數開盤/收盤，upsert寫入Supabase的stock_prices/taiex_index。
 用service_role key(不受RLS限制)，只在GitHub Actions這種受信任的後端環境使用，絕不能放進前端網頁。
+
+用yfinance的auto_adjust=True，open/close都是還原股價(已內含除權息調整)，不是原始未調整價格——
+這樣個股配息、減資、股票分割不會在報酬率序列裡製造假的價格跳空，是回測用途的正確選擇。
 
 股票清單不是寫死的名單，是直接查Supabase的factset_revisions撈「歷史上出現過目標價/EPS修正新聞的所有ticker」，
 這樣就算換一台電腦、換一個人接手，只要有這組service_role key，重跑這支腳本就能拿到完整正確的追蹤清單，
@@ -15,6 +18,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+import pandas as pd
 import requests
 import yfinance as yf
 
@@ -85,14 +89,20 @@ def main():
                 df = yf.download(f"{t}{suf}", start=start_date, end=end_date, progress=False, auto_adjust=True)
                 if df.empty:
                     continue
-                close = df["Close"]
+                close, open_ = df["Close"], df["Open"]
                 if hasattr(close, "columns"):
                     close = close.iloc[:, 0]
-                close = close.dropna()
-                if len(close) == 0:
+                if hasattr(open_, "columns"):
+                    open_ = open_.iloc[:, 0]
+                merged = close.to_frame("close").join(open_.to_frame("open")).dropna(how="all")
+                if len(merged) == 0:
                     continue
-                for d, v in close.items():
-                    price_rows.append({"ticker": t, "date": d.strftime("%Y-%m-%d"), "close": float(v)})
+                for d, row in merged.iterrows():
+                    price_rows.append({
+                        "ticker": t, "date": d.strftime("%Y-%m-%d"),
+                        "close": None if pd.isna(row["close"]) else float(row["close"]),
+                        "open": None if pd.isna(row["open"]) else float(row["open"]),
+                    })
                 ok = True
                 break
             except Exception:
@@ -109,11 +119,17 @@ def main():
         print("stock_prices upsert 完成")
 
     taiex_df = yf.download("^TWII", start=start_date, end=end_date, progress=False, auto_adjust=True)
-    tclose = taiex_df["Close"]
+    tclose, topen = taiex_df["Close"], taiex_df["Open"]
     if hasattr(tclose, "columns"):
         tclose = tclose.iloc[:, 0]
-    tclose = tclose.dropna()
-    taiex_rows = [{"date": d.strftime("%Y-%m-%d"), "close": float(v)} for d, v in tclose.items()]
+    if hasattr(topen, "columns"):
+        topen = topen.iloc[:, 0]
+    tmerged = tclose.to_frame("close").join(topen.to_frame("open")).dropna(how="all")
+    taiex_rows = [{
+        "date": d.strftime("%Y-%m-%d"),
+        "close": None if pd.isna(row["close"]) else float(row["close"]),
+        "open": None if pd.isna(row["open"]) else float(row["open"]),
+    } for d, row in tmerged.iterrows()]
     print(f"TAIEX筆數: {len(taiex_rows)}")
     if taiex_rows:
         upsert_batch("taiex_index", taiex_rows, "date")

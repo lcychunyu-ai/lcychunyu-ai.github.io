@@ -18,48 +18,77 @@
     - max_portfolio_exposure：投組層級總曝險上限(PDF只有單檔上限，沒有整體曝險上限)
 
 已知限制(誠實揭露，不是之後才發現)：
-    - 我們資料庫只有每日收盤價(見build_price_dataset.py，只抓了Close)，沒有開盤價，
-      所以fill_price="open"目前無法真的用開盤價成交，會拋出NotImplementedError，
-      不會偷偷拿收盤價冒充開盤價——要測開盤版必須先重新抓開盤價資料。
     - 同一天同一股票多篇新聞，沿用資料庫view v_unified_target_events既有的去重邏輯
       (優先TARGET_PRICE類型、其次analyst_count較高者)，跟PDF「取當日最後一篇」不完全一致，
       差異只發生在極少數同日多篇的邊界案例，不重建。
     - 交易成本、滑價、漲跌停限制、EPS調升訊號混合，都不在這版基準裡，PDF本身也明講是下一步。
+
+2026-07-28更新：股價/大盤資料改直接從Supabase讀(stock_prices/taiex_index表，透過
+get_strategy_price_bundle() RPC一次拉回)，不再讀本機的factset_data/prices_full.json——
+這樣這支研究腳本跟網站的strategy.html用同一份資料來源，不會兩邊對不起來。開盤價也已經支援：
+fill_price="open"時，進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤；
+出場當天(不論收盤/開盤版本)沿用既有簡化，當天不計入報酬(部位直接從當日報酬迴圈移除)。
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
+import requests
 
-DATA_DIR = "factset_data"
+SUPABASE_URL = "https://kiiwaojcetxmeycyupvn.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtpaXdhb2pjZXR4bWV5Y3l1cHZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1Mjk2NzAsImV4cCI6MjEwMDEwNTY3MH0.QPnEenJ8OtgWm1q3zhstinsAzXJAD6bunPp6JhrL4PU"
+SB_HEADERS = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"}
 
 
 # ----------------------------------------------------------------------------
-# 1. 資料載入
+# 1. 資料載入(改自Supabase，跟strategy.html同一個RPC/同一份資料)
 # ----------------------------------------------------------------------------
+
+def _fetch_all_events():
+    out, offset, page_size = [], 0, 5000
+    while True:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/v_unified_target_events",
+            headers=SB_HEADERS,
+            params={
+                "select": "ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count",
+                "direction": "in.(UP,DOWN)", "order": "date.asc,id.asc",
+                "offset": str(offset), "limit": str(page_size),
+            },
+            timeout=60,
+        )
+        r.raise_for_status()
+        page = r.json()
+        out.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return out
+
 
 def load_data():
-    prices_raw = json.load(open(f"{DATA_DIR}/prices_full.json"))
-    taiex_raw = json.load(open(f"{DATA_DIR}/taiex_full.json"))
-    events_raw = json.load(open(f"{DATA_DIR}/events_unified_target_full.json"))
+    r = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle", headers=SB_HEADERS, json={}, timeout=60)
+    r.raise_for_status()
+    bundle = r.json()
+    events_raw = _fetch_all_events()
 
-    taiex = pd.Series(taiex_raw, dtype=float).sort_index()
-    taiex.index = pd.to_datetime(taiex.index)
+    taiex = pd.Series(bundle["taiex_close"], index=pd.to_datetime(bundle["dates"]), dtype=float)
+    taiex_open = pd.Series(bundle["taiex_open"], index=pd.to_datetime(bundle["dates"]), dtype=float)
     calendar = taiex.index  # 用大盤有報價的日子當交易日曆基準
 
     stock_price = {}
-    for t, d in prices_raw.items():
-        ser = pd.Series(d["prices"], dtype=float).sort_index()
-        ser.index = pd.to_datetime(ser.index)
-        stock_price[t] = ser.reindex(calendar)
+    stock_price_open = {}
+    for t, arr in bundle["tickers_close"].items():
+        stock_price[t] = pd.Series(arr, index=calendar, dtype=float)
+    for t, arr in bundle["tickers_open"].items():
+        stock_price_open[t] = pd.Series(arr, index=calendar, dtype=float)
 
     events = pd.DataFrame(events_raw)
     events["date"] = pd.to_datetime(events["date"])
-    return stock_price, taiex, calendar, events
+    return stock_price, stock_price_open, taiex, taiex_open, calendar, events
 
 
 def next_trading_day(d: pd.Timestamp, calendar: pd.DatetimeIndex) -> Optional[pd.Timestamp]:
@@ -74,24 +103,32 @@ def next_trading_day(d: pd.Timestamp, calendar: pd.DatetimeIndex) -> Optional[pd
 # 2. 事件表前處理：算出兩種上漲空間、歷史平均(給avg_rule跟異常調升因子用)
 # ----------------------------------------------------------------------------
 
-def prepare_events(events: pd.DataFrame, stock_price: dict, calendar: pd.DatetimeIndex) -> pd.DataFrame:
+def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex) -> pd.DataFrame:
     ev = events[events["direction"] == "UP"].copy()
     ev = ev.sort_values(["ticker", "date"]).reset_index(drop=True)
 
     ev["entry_date"] = ev["date"].apply(lambda d: next_trading_day(d, calendar))
     ev = ev.dropna(subset=["entry_date"]).copy()
 
-    def entry_price(row):
+    def entry_price_close(row):
         ser = stock_price.get(row["ticker"])
         if ser is None:
             return np.nan
         return ser.get(row["entry_date"], np.nan)
 
-    ev["entry_price"] = ev.apply(entry_price, axis=1)
-    ev = ev.dropna(subset=["entry_price"]).copy()
+    def entry_price_open(row):
+        ser = stock_price_open.get(row["ticker"])
+        if ser is None:
+            return np.nan
+        return ser.get(row["entry_date"], np.nan)
 
-    # 上漲空間兩種算法
-    ev["upside_price"] = (ev["new_target"] - ev["entry_price"]) / ev["entry_price"]
+    ev["entry_price_close"] = ev.apply(entry_price_close, axis=1)
+    ev = ev.dropna(subset=["entry_price_close"]).copy()
+    ev["entry_price_open"] = ev.apply(entry_price_open, axis=1)
+
+    # 上漲空間兩種算法，收盤版/開盤版各自算一次(進場基準不同，上漲空間自然也不同)
+    ev["upside_price_close"] = (ev["new_target"] - ev["entry_price_close"]) / ev["entry_price_close"]
+    ev["upside_price_open"] = (ev["new_target"] - ev["entry_price_open"]) / ev["entry_price_open"]
     ev["upside_change"] = ev["target_change_pct"] / 100.0
 
     # 歷史平均：只用「這筆事件之前」該股票的調升幅度/分析師數(expanding shift(1))，
@@ -138,14 +175,20 @@ class StrategyParams:
 # ----------------------------------------------------------------------------
 
 def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    upside_col = "upside_price" if p.upside_formula == "price" else "upside_change"
+    entry_col = "entry_price_open" if p.fill_price == "open" else "entry_price_close"
+    if p.upside_formula == "price":
+        upside_col = "upside_price_open" if p.fill_price == "open" else "upside_price_close"
+    else:
+        upside_col = "upside_change"
     mask = (
-        (ev["target_change_pct"] >= p.min_upgrade_pct)
+        ev[entry_col].notna()
+        & (ev["target_change_pct"] >= p.min_upgrade_pct)
         & (ev["analyst_count"] >= p.min_analyst_count)
         & (ev[upside_col] >= p.min_upside)
     )
     out = ev[mask].copy()
     out["upside_used"] = out[upside_col]
+    out["entry_price_used"] = out[entry_col]
     return out
 
 
@@ -229,13 +272,8 @@ def allocate_weights(scores: pd.Series, p: StrategyParams) -> pd.Series:
 # ----------------------------------------------------------------------------
 
 def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: pd.Series,
-                  calendar: pd.DatetimeIndex, start: str, end: str, down_lookup=None) -> dict:
-    if p.fill_price == "open":
-        raise NotImplementedError(
-            "資料庫目前只有收盤價(build_price_dataset.py只抓了Close)，沒有開盤價，"
-            "無法真的用開盤價成交。要測開盤版必須先重新抓開盤價資料，不能拿收盤價冒充。"
-        )
-
+                  calendar: pd.DatetimeIndex, start: str, end: str, down_lookup=None,
+                  stock_price_open: Optional[dict] = None) -> dict:
     period_cal = calendar[(calendar >= start) & (calendar <= end)]
     if len(period_cal) == 0:
         return {"daily_book": pd.DataFrame(), "summary": {}, "trades": pd.DataFrame()}
@@ -246,6 +284,15 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     # 預先算好每檔股票的日報酬序列，不要在逐日迴圈裡對整條序列重算pct_change()，
     # 200多檔股票、900多個交易日，迴圈裡重算會慢上好幾個量級。
     stock_ret = {t: ser.pct_change(fill_method=None) for t, ser in stock_price.items()}
+    # 開盤成交版本：進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤
+    # (訊號隔日開盤才成交，當天開盤前的變動沒有參與到)；進場後第二天起跟收盤版一樣用stock_ret。
+    stock_ret_open_entry = {}
+    if p.fill_price == "open" and stock_price_open:
+        for t, close_ser in stock_price.items():
+            open_ser = stock_price_open.get(t)
+            if open_ser is None:
+                continue
+            stock_ret_open_entry[t] = (close_ser - open_ser) / open_ser
 
     cands_all = filter_candidates(ev, p)
     cands_all = cands_all[(cands_all["entry_date"] >= period_cal[0]) & (cands_all["entry_date"] <= period_cal[-1])]
@@ -298,7 +345,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         row = todays[todays["ticker"] == t].iloc[0]
                         holdings[t] = {
                             "weight": new_weights[t], "entry_date": day,
-                            "entry_price": row["entry_price"], "target": row["new_target"],
+                            "entry_price": row["entry_price_used"], "target": row["new_target"],
                         }
                 for t in list(holdings.keys()):
                     if t in new_weights.index:
@@ -307,7 +354,8 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         # --- 當日報酬(固定資本100，權重在持有期間不因股價變動而複利滾動) ---
         daily_ret = 0.0
         for t, h in holdings.items():
-            rser = stock_ret.get(t)
+            is_entry_day = p.fill_price == "open" and h["entry_date"] == day
+            rser = stock_ret_open_entry.get(t) if is_entry_day else stock_ret.get(t)
             if rser is None:
                 continue
             r = rser.get(day, np.nan)
@@ -387,8 +435,8 @@ def summarize(book: pd.DataFrame, trades: pd.DataFrame) -> dict:
 # ----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    stock_price, taiex, calendar, events = load_data()
-    ev = prepare_events(events, stock_price, calendar)
+    stock_price, stock_price_open, taiex, taiex_open, calendar, events = load_data()
+    ev = prepare_events(events, stock_price, stock_price_open, calendar)
     down_lookup = down_tickers_on_factory(events, calendar)
 
     print(f"UP事件(訊號)總數: {len(ev)}")
@@ -406,7 +454,8 @@ if __name__ == "__main__":
 
     print("=== Baseline(equal權重, upside_formula=price) 三段式結果 ===")
     for name, s, e in periods:
-        res = run_backtest(baseline, ev, stock_price, taiex, calendar, s, e, down_lookup=down_lookup)
+        res = run_backtest(baseline, ev, stock_price, taiex, calendar, s, e, down_lookup=down_lookup,
+                            stock_price_open=stock_price_open)
         print(f"{name}: {res['summary']}")
 
     print("\n=== sizing_mode / upside_formula / avg_rule 開關組合檢查(全期間2023-2026) ===")
@@ -414,7 +463,8 @@ if __name__ == "__main__":
         for upside_f in ["price", "change"]:
             for avg_rule in ["none", "tier3"]:
                 p = StrategyParams(sizing_mode=sizing, upside_formula=upside_f, avg_rule=avg_rule)
-                res = run_backtest(p, ev, stock_price, taiex, calendar, "2023-01-01", "2026-12-31", down_lookup=down_lookup)
+                res = run_backtest(p, ev, stock_price, taiex, calendar, "2023-01-01", "2026-12-31", down_lookup=down_lookup,
+                                    stock_price_open=stock_price_open)
                 s = res["summary"]
                 print(f"sizing={sizing:11s} upside={upside_f:6s} avg_rule={avg_rule:5s} -> "
                       f"總報酬={s.get('total_return_pct')}% 超額={s.get('excess_return_pct')}% "
