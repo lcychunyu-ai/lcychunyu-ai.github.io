@@ -326,13 +326,7 @@
           <div class="param-field"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
         </div>
 
-        <div class="param-field">
-          <label>上漲空間算法</label>
-          <select id="p-upsideFormula">
-            <option value="price">股價版：(新目標價−昨日收盤價)/昨日收盤價</option>
-            <option value="change">目標價版：(新目標價−舊目標價)/舊目標價</option>
-          </select>
-        </div>
+        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:0 0 14px;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
 
         <div class="param-field">
           <label>歷史平均加碼規則</label>
@@ -521,13 +515,12 @@ function prepareEvents(events) {
     const analystVal = Number(e.analyst_count);
     const newTarget = Number(e.new_target);
     const upsidePrice = prevClose != null ? (newTarget - prevClose) / prevClose : null;
-    const upsideChange = changeVal / 100;
 
     out.push({
       ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],
       entryPriceClose, entryPriceOpen, newTarget,
       targetChangePct: changeVal, analystCount: analystVal,
-      upsidePrice, upsideChange, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
+      upsidePrice, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
     });
     hist.push({ change: changeVal, analyst: analystVal });
   }
@@ -603,11 +596,10 @@ async function loadAll() {
 function filterCandidates(cands, p) {
   const isOpen = p.fillPrice === 'open';
   const entryKey = isOpen ? 'entryPriceOpen' : 'entryPriceClose';
-  // 上漲空間(股價版)固定用「進場前一天收盤價」當基準，跟實際成交用開盤/收盤無關。
-  const upsideKey = p.upsideFormula === 'price' ? 'upsidePrice' : 'upsideChange';
+  // 上漲空間固定用「進場前一天收盤價」當基準：(新目標價−昨日收盤價)/昨日收盤價，跟實際成交用開盤/收盤無關。
   return cands
-    .filter(c => c[entryKey] != null && c[upsideKey] != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c[upsideKey] >= p.minUpside)
-    .map(c => ({ ...c, upsideUsed: c[upsideKey], entryPriceUsed: c[entryKey] }));
+    .filter(c => c[entryKey] != null && c.upsidePrice != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside)
+    .map(c => ({ ...c, upsideUsed: c.upsidePrice, entryPriceUsed: c[entryKey] }));
 }
 
 function scoreOne(c, p) {
@@ -814,7 +806,6 @@ function readParams() {
     minUpgradePct: Number(document.getElementById('p-minUpgrade').value),
     minAnalystCount: Number(document.getElementById('p-minAnalyst').value),
     minUpside: Number(document.getElementById('p-minUpside').value) / 100,
-    upsideFormula: document.getElementById('p-upsideFormula').value,
     maxHoldDays: Number(document.getElementById('p-maxHold').value),
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,

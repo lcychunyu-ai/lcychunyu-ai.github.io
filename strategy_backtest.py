@@ -11,8 +11,10 @@
     ⑥ 訓練(2023-2024)/驗證(2025)/測試(2026)三段式，避免用同一批資料選參數又宣稱有效
 
 使用者在PDF基礎上額外要求、本檔案也做的部分：
-    - 上漲空間兩種算法都做：upside_formula="price"(PDF原版，需要股價) 或
-      "change"(使用者版，(新目標價-舊目標價)/舊目標價，不用股價，其實就是target_change_pct)
+    - 上漲空間只用股價版：(新目標價-昨日收盤價)/昨日收盤價(昨日=訊號當天，進場前一天，
+      不用進場價本身，因為進場價已經反映訊號公布後市場的反應，拿它當分母會低估真正的上漲空間)。
+      2026-07-28：原本另外還有一個不用股價的"change"版((新目標價-舊目標價)/舊目標價)，
+      經使用者確認不需要，已移除，只留股價版這一種算法。
     - avg_rule="tier3"：本次調升幅度或分析師數「高於」該股歷史平均→加碼；
       「低於」平均→維持原權重，不加碼也不出場(不是PDF的連續分數排名式，是使用者要的三段式邏輯)
     - max_portfolio_exposure：投組層級總曝險上限(PDF只有單檔上限，沒有整體曝險上限)
@@ -138,9 +140,8 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
     ev["entry_price_open"] = ev.apply(entry_price_open, axis=1)
     ev["entry_prev_close"] = ev.apply(entry_prev_close, axis=1)
 
-    # 上漲空間(股價版)固定用進場前一天收盤價當基準，跟實際成交用開盤/收盤無關
+    # 上漲空間固定用進場前一天收盤價當基準，跟實際成交用開盤/收盤無關
     ev["upside_price"] = (ev["new_target"] - ev["entry_prev_close"]) / ev["entry_prev_close"]
-    ev["upside_change"] = ev["target_change_pct"] / 100.0
 
     # 歷史平均：只用「這筆事件之前」該股票的調升幅度/分析師數(expanding shift(1))，
     # 避免用到當下這筆事件本身或未來事件，這是point-in-time紀律，不是可省略的細節。
@@ -162,7 +163,6 @@ class StrategyParams:
     min_upgrade_pct: float = 3.0            # 最低目標價調升幅度(%)
     min_analyst_count: int = 3              # 最低分析師數
     min_upside: float = 0.0                 # 最低上漲空間門檻(小數，例如0.05=5%)
-    upside_formula: Literal["price", "change"] = "price"
 
     max_hold_days: int = 60
     max_weight_per_stock: float = 0.2
@@ -187,16 +187,15 @@ class StrategyParams:
 
 def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     entry_col = "entry_price_open" if p.fill_price == "open" else "entry_price_close"
-    upside_col = "upside_price" if p.upside_formula == "price" else "upside_change"
     mask = (
         ev[entry_col].notna()
-        & ev[upside_col].notna()
+        & ev["upside_price"].notna()
         & (ev["target_change_pct"] >= p.min_upgrade_pct)
         & (ev["analyst_count"] >= p.min_analyst_count)
-        & (ev[upside_col] >= p.min_upside)
+        & (ev["upside_price"] >= p.min_upside)
     )
     out = ev[mask].copy()
-    out["upside_used"] = out[upside_col]
+    out["upside_used"] = out["upside_price"]
     out["entry_price_used"] = out[entry_col]
     return out
 
@@ -465,20 +464,19 @@ if __name__ == "__main__":
                ("驗證期2025", "2025-01-01", "2025-12-31"),
                ("測試期2026", "2026-01-01", "2026-12-31")]
 
-    print("=== Baseline(equal權重, upside_formula=price) 三段式結果 ===")
+    print("=== Baseline(equal權重) 三段式結果 ===")
     for name, s, e in periods:
         res = run_backtest(baseline, ev, stock_price, taiex, calendar, s, e, down_lookup=down_lookup,
                             stock_price_open=stock_price_open)
         print(f"{name}: {res['summary']}")
 
-    print("\n=== sizing_mode / upside_formula / avg_rule 開關組合檢查(全期間2023-2026) ===")
+    print("\n=== sizing_mode / avg_rule 開關組合檢查(全期間2023-2026) ===")
     for sizing in ["equal", "by_upgrade", "composite", "multifactor"]:
-        for upside_f in ["price", "change"]:
-            for avg_rule in ["none", "tier3"]:
-                p = StrategyParams(sizing_mode=sizing, upside_formula=upside_f, avg_rule=avg_rule)
-                res = run_backtest(p, ev, stock_price, taiex, calendar, "2023-01-01", "2026-12-31", down_lookup=down_lookup,
-                                    stock_price_open=stock_price_open)
-                s = res["summary"]
-                print(f"sizing={sizing:11s} upside={upside_f:6s} avg_rule={avg_rule:5s} -> "
-                      f"總報酬={s.get('total_return_pct')}% 超額={s.get('excess_return_pct')}% "
-                      f"交易數={s.get('n_trades')} 勝率={s.get('win_rate_pct')}%")
+        for avg_rule in ["none", "tier3"]:
+            p = StrategyParams(sizing_mode=sizing, avg_rule=avg_rule)
+            res = run_backtest(p, ev, stock_price, taiex, calendar, "2023-01-01", "2026-12-31", down_lookup=down_lookup,
+                                stock_price_open=stock_price_open)
+            s = res["summary"]
+            print(f"sizing={sizing:11s} avg_rule={avg_rule:5s} -> "
+                  f"總報酬={s.get('total_return_pct')}% 超額={s.get('excess_return_pct')}% "
+                  f"交易數={s.get('n_trades')} 勝率={s.get('win_rate_pct')}%")
