@@ -337,13 +337,7 @@
         </div>
         <div class="param-field"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1"/></div>
 
-        <div class="param-field">
-          <label>成交價格</label>
-          <select id="p-fillPrice">
-            <option value="close">下一交易日收盤</option>
-            <option value="open">下一交易日開盤</option>
-          </select>
-        </div>
+        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:0 0 14px;">成交價格：新聞於台北時間13:30(台股收盤)前公布用當天收盤價進場，之後(或非交易日)公布用下一交易日開盤價進場，依每則新聞的實際公布時間點自動判斷。</p>
 
         <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>目標價調降時賣出</label></div>
         <div class="param-field checkbox" style="margin-bottom:16px;"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時賣出</label></div>
@@ -359,7 +353,7 @@
         <div class="chart-panel">
           <div class="eyebrow-row"><span class="eyebrow">Arithmetic Return Curve</span></div>
           <div class="block-title" style="margin-left:0;">每日報酬累加 vs. 大盤</div>
-          <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>收盤成交</span><span><span class="sw" style="background:var(--accent);"></span>開盤成交</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
+          <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>我們的策略</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
           <div id="curve-holder"></div>
         </div>
 
@@ -389,11 +383,6 @@
             <div><span class="eyebrow">Daily Ledger</span><h3>每日資金、持股與買賣</h3></div>
           </div>
           <div class="ledger-controls">
-            <label>查看版本</label>
-            <select id="ledger-version-select" class="mono">
-              <option value="close">收盤成交</option>
-              <option value="open">開盤成交</option>
-            </select>
             <label>交易日期</label>
             <select id="ledger-date-select" class="mono"></select>
             <button class="btn secondary small" id="ledger-latest-btn">跳到最新交易日</button>
@@ -453,7 +442,6 @@ let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [
 let STOCK_RET = {}, TAIEX_RET = [], STOCK_RET_OPEN_ENTRY = {};
 let EV_UP = [], DOWN_BY_DATE = new Map();
 let RAW_UP_COUNT = 0;
-let HAS_OPEN_DATA = false;
 
 function bisectRight(arr, x) {
   let lo = 0, hi = arr.length;
@@ -482,6 +470,9 @@ function stdSample(arr) {
   return Math.sqrt(v);
 }
 
+// 進場時機規則(唯一策略)：不分新聞公布時間點，一律用下一交易日「開盤價」進場——
+// 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡，
+// 不會有「這則新聞要用收盤價、那則要用開盤價」的情況。
 function prepareEvents(events) {
   const up = events.filter(e => e.direction === 'UP')
     .slice()
@@ -494,11 +485,10 @@ function prepareEvents(events) {
     if (entryIdx == null) continue;
     const priceArr = PRICES[e.ticker];
     if (!priceArr) continue;
-    const entryPriceClose = priceArr[entryIdx];
-    if (entryPriceClose == null) continue;
     const openArr = PRICES_OPEN[e.ticker];
-    const entryPriceOpen = openArr ? openArr[entryIdx] : null;
-    // 上漲空間的「股價版」用進場前一天的收盤價(訊號當天收盤，還沒受進場成交價影響)當基準，
+    const entryPrice = openArr ? openArr[entryIdx] : null;
+    if (entryPrice == null) continue;
+    // 上漲空間用進場前一天的收盤價(訊號還沒反應前的最後一個已知價格)當基準，
     // 不用進場價本身——進場價已經反映了訊號公布後市場的反應，拿它當分母會低估真正的上漲空間。
     const prevClose = entryIdx > 0 ? priceArr[entryIdx - 1] : null;
 
@@ -518,7 +508,7 @@ function prepareEvents(events) {
 
     out.push({
       ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],
-      entryPriceClose, entryPriceOpen, newTarget,
+      entryPrice, newTarget,
       targetChangePct: changeVal, analystCount: analystVal,
       upsidePrice, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
     });
@@ -558,7 +548,6 @@ async function loadAll() {
   PRICES_OPEN = bundle.tickers_open || {};
   TAIEX = bundle.taiex_close;
   TAIEX_OPEN = bundle.taiex_open || [];
-  HAS_OPEN_DATA = Object.values(PRICES_OPEN).some(arr => arr && arr.some(v => v != null));
 
   STOCK_RET = {};
   STOCK_RET_OPEN_ENTRY = {};
@@ -594,12 +583,9 @@ async function loadAll() {
 // ============================================================================
 
 function filterCandidates(cands, p) {
-  const isOpen = p.fillPrice === 'open';
-  const entryKey = isOpen ? 'entryPriceOpen' : 'entryPriceClose';
-  // 上漲空間固定用「進場前一天收盤價」當基準：(新目標價−昨日收盤價)/昨日收盤價，跟實際成交用開盤/收盤無關。
   return cands
-    .filter(c => c[entryKey] != null && c.upsidePrice != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside)
-    .map(c => ({ ...c, upsideUsed: c.upsidePrice, entryPriceUsed: c[entryKey] }));
+    .filter(c => c.entryPrice != null && c.upsidePrice != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside)
+    .map(c => ({ ...c, upsideUsed: c.upsidePrice, entryPriceUsed: c.entryPrice }));
 }
 
 function scoreOne(c, p) {
@@ -716,26 +702,21 @@ function runBacktest(p, startDate, endDate) {
     }
 
     // --- 當日報酬 + 個股歸因 ---
-    // 開盤成交版本：進場當天用「開盤買進→收盤」的報酬(不是完整一天的收盤對收盤)，
-    // 因為訊號隔日開盤才成交，當天開盤前的價格變動沒有參與到；進場後第二天起跟收盤版一樣用逐日收盤對收盤。
-    // 收盤成交版本：進場當天是收盤才成交，當天完全沒有部位曝險，報酬算0，隔天才開始計入
-    // (跟出場當天不計報酬是同一個道理，兩者都要排除，之前只排除了出場日、漏了進場日)。
+    // 唯一策略固定用開盤進場：進場當天只算「開盤買進→收盤」這段的報酬(不是完整一天的
+    // 收盤對收盤)，因為開盤前的價格變動沒有參與到；進場後第二天起用逐日收盤對收盤。
+    // 出場當天不計報酬(部位當天被移除，跟固定資本每日平帳的簡化一致)。
     let dailyRet = 0;
     const attribution = [];
     for (const [t, h] of holdings) {
       const isEntryDay = h.entryIdx === i;
-      const isOpenEntryDay = p.fillPrice === 'open' && isEntryDay;
-      const isCloseEntryDay = p.fillPrice === 'close' && isEntryDay;
-      const r = isOpenEntryDay
+      const r = isEntryDay
         ? (STOCK_RET_OPEN_ENTRY[t] ? STOCK_RET_OPEN_ENTRY[t][i] : null)
-        : isCloseEntryDay
-        ? null
         : (STOCK_RET[t] ? STOCK_RET[t][i] : null);
       const priceArr = PRICES[t];
       const priceEnd = priceArr ? priceArr[i] : null;
-      const priceStart = isOpenEntryDay ? (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null) : (priceArr && i > 0 ? priceArr[i - 1] : null);
+      const priceStart = isEntryDay ? (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null) : (priceArr && i > 0 ? priceArr[i - 1] : null);
       if (r != null) dailyRet += h.weight * r;
-      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay: isOpenEntryDay, isCloseEntryDay });
+      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay });
     }
     const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
 
@@ -818,7 +799,6 @@ function readParams() {
     maxPortfolioExposure: Number(document.getElementById('p-maxExposure').value) / 100,
     avgRule: document.getElementById('p-avgRule').value,
     avgBoostMult: Number(document.getElementById('p-avgBoost').value),
-    fillPrice: document.getElementById('p-fillPrice').value,
   };
 }
 
@@ -834,33 +814,30 @@ const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', comp
 // 上方摘要卡片 / 資料涵蓋度
 // ============================================================================
 
-function renderCards(closeSummary, openSummary, bestExcessInfo) {
+function renderCards(summary, bestExcessInfo) {
   const container = document.getElementById('card-row-holder');
-  if (!closeSummary) { container.innerHTML = '<div class="empty-state" style="padding:30px;">這段區間沒有符合條件的交易，無法產生結果。</div>'; return; }
-  const openCard = openSummary
-    ? `<div class="value ${openSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(openSummary.totalReturnPct)}</div>
-       <div class="sub">Sharpe ${fmtNum2(openSummary.sharpe)} · 回撤 ${fmtPct(openSummary.maxDrawdownPct)}</div>`
-    : `<div class="value muted">—</div><div class="sub">這段區間無開盤價可用的交易</div>`;
+  if (!summary) { container.innerHTML = '<div class="empty-state" style="padding:30px;">這段區間沒有符合條件的交易，無法產生結果。</div>'; return; }
   container.innerHTML = `
     <div class="card-row">
       <div class="stat-card">
-        <div class="label">收盤成交策略</div>
-        <div class="value ${closeSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(closeSummary.totalReturnPct)}</div>
-        <div class="sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(closeSummary.sharpe)} · 回撤 ${fmtPct(closeSummary.maxDrawdownPct)}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">開盤成交策略</div>
-        ${openCard}
+        <div class="label">我們的策略</div>
+        <div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div>
+        <div class="sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(summary.sharpe)} · 回撤 ${fmtPct(summary.maxDrawdownPct)}</div>
       </div>
       <div class="stat-card">
         <div class="label">台股加權指數</div>
-        <div class="value">${fmtPct(closeSummary.totalTaiexReturnPct)}</div>
+        <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
         <div class="sub">每日報酬相加 · 同一算術口徑</div>
       </div>
       <div class="stat-card">
-        <div class="label">最佳版本超額報酬</div>
+        <div class="label">目前參數超額報酬</div>
+        <div class="value ${summary.excessReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div>
+        <div class="sub">策略 − 加權指數，左側面板目前這組參數</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">訓練期最佳參數超額報酬</div>
         <div class="value ${bestExcessInfo && bestExcessInfo.excess >= 0 ? 'up' : 'down'}">${bestExcessInfo ? fmtPct(bestExcessInfo.excess) : '—'}</div>
-        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}</div>
+        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}（不同於左側目前參數，見下方樣本外驗證）</div>
       </div>
     </div>`;
 }
@@ -881,12 +858,11 @@ function renderCoverage() {
     </div>`;
 }
 
-function renderCurve(rows, openRows) {
+function renderCurve(rows) {
   const container = document.getElementById('curve-holder');
   if (!rows.length) { container.innerHTML = ''; return; }
   const W = 900, H = 300, padL = 46, padR = 16, padT = 14, padB = 22;
   const vals = rows.flatMap(r => [r.cumReturn * 100, r.cumTaiex * 100]);
-  if (openRows) openRows.forEach(r => vals.push(r.cumReturn * 100));
   let vMin = Math.min(...vals, 0), vMax = Math.max(...vals, 0);
   if (vMin === vMax) { vMin -= 1; vMax += 1; }
   const pad = (vMax - vMin) * 0.08;
@@ -896,7 +872,7 @@ function renderCurve(rows, openRows) {
 
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
-  const upColor = cssVar('--up'), accentColor = cssVar('--accent');
+  const upColor = cssVar('--up');
 
   let gridLines = '';
   for (let i = 0; i <= 3; i++) {
@@ -910,13 +886,11 @@ function renderCurve(rows, openRows) {
 
   const stratPath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.cumReturn * 100).toFixed(1)}`).join(' ');
   const taiexPath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.cumTaiex * 100).toFixed(1)}`).join(' ');
-  const openPath = openRows ? openRows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.cumReturn * 100).toFixed(1)}`).join(' ') : null;
 
   const svgId = 'sc' + Math.random().toString(36).slice(2, 9);
   container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
     ${gridLines}
     <path d="${taiexPath}" fill="none" stroke="${inkFaint}" stroke-width="2" stroke-linejoin="round"/>
-    ${openPath ? `<path d="${openPath}" fill="none" stroke="${accentColor}" stroke-width="2" stroke-linejoin="round" opacity="0.85"/>` : ''}
     <path d="${stratPath}" fill="none" stroke="${upColor}" stroke-width="2.4" stroke-linejoin="round"/>
     <rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" id="${svgId}-hit"/>
   </svg>
@@ -932,8 +906,7 @@ function renderCurve(rows, openRows) {
     const relX = (evt.clientX - rect.left) / rect.width * W;
     const i = Math.max(0, Math.min(rows.length - 1, Math.round((relX - padL) / (W - padL - padR) * (rows.length - 1))));
     const r = rows[i];
-    const openR = openRows ? openRows[i] : null;
-    showTip(evt, `<b>${r.date}</b><br/>收盤成交：<b>${fmtPct(r.cumReturn * 100)}</b><br/>開盤成交：${openR ? `<b>${fmtPct(openR.cumReturn * 100)}</b>` : '<span style="color:var(--ink-faint);">無資料</span>'}<br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b><br/>超額(收盤)：<b>${fmtPct(r.excess * 100)}</b>`);
+    showTip(evt, `<b>${r.date}</b><br/>策略：<b>${fmtPct(r.cumReturn * 100)}</b><br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b>`);
   });
   hit.addEventListener('mouseleave', hideTip);
 }
@@ -975,41 +948,28 @@ function buildDailyExplanation(r, prevRow) {
   return `${r.date} 採用「${sizing}」，${capLine}，並將單檔權重限制在 ${(r.maxWeightPerStock * 100).toFixed(0)}%。收盤後共持有 ${r.holdings.length} 檔，主要為 ${top}。當日訊號或再平衡交易為買進 ${nBuy} 筆、賣出 ${nSell} 筆；當日報酬 ${dailyPct}，${flow}，隔日再以標準資本100開始。`;
 }
 
-let LEDGER_ROWS_CLOSE = [], LEDGER_ROWS_OPEN = [];
-
-function renderLedger(closeRows, openRows) {
-  LEDGER_ROWS_CLOSE = closeRows;
-  LEDGER_ROWS_OPEN = openRows || [];
+function renderLedger(rows) {
+  CURRENT_ROWS = rows;
   const section = document.getElementById('ledger-section');
-  if (!closeRows.length) { section.style.display = 'none'; return; }
+  if (!rows.length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
-  const versionSel = document.getElementById('ledger-version-select');
-  versionSel.querySelector('option[value="open"]').disabled = LEDGER_ROWS_OPEN.length === 0;
-  versionSel.value = 'close';
-  versionSel.onchange = rebuildLedgerDateOptions;
+  const sel = document.getElementById('ledger-date-select');
+  sel.innerHTML = '';
+  rows.forEach((r, i) => {
+    const opt = document.createElement('option');
+    opt.value = i; opt.textContent = r.date;
+    sel.appendChild(opt);
+  });
+  sel.selectedIndex = rows.length - 1;
+  sel.onchange = renderLedgerDetail;
 
   document.getElementById('ledger-latest-btn').onclick = () => {
-    const sel = document.getElementById('ledger-date-select');
     sel.selectedIndex = sel.options.length - 1;
     renderLedgerDetail();
   };
   document.getElementById('p-capital').oninput = renderLedgerDetail;
   document.getElementById('ledger-csv-btn').onclick = exportCsv;
-  rebuildLedgerDateOptions();
-}
-
-function rebuildLedgerDateOptions() {
-  CURRENT_ROWS = document.getElementById('ledger-version-select').value === 'open' ? LEDGER_ROWS_OPEN : LEDGER_ROWS_CLOSE;
-  const sel = document.getElementById('ledger-date-select');
-  sel.innerHTML = '';
-  CURRENT_ROWS.forEach((r, i) => {
-    const opt = document.createElement('option');
-    opt.value = i; opt.textContent = r.date;
-    sel.appendChild(opt);
-  });
-  sel.selectedIndex = CURRENT_ROWS.length - 1;
-  sel.onchange = renderLedgerDetail;
   renderLedgerDetail();
 }
 
@@ -1021,8 +981,6 @@ function renderLedgerDetail() {
   const prevRow = idx > 0 ? rows[idx - 1] : null;
   const capital = Number(document.getElementById('p-capital').value) || 0;
   const detail = document.getElementById('ledger-detail');
-  const isOpenVersion = document.getElementById('ledger-version-select').value === 'open';
-  const versionLabel = isOpenVersion ? '開盤成交' : '收盤成交';
 
   const prevLots = new Map();
   if (prevRow) prevRow.holdings.forEach(h => prevLots.set(h.ticker, lotsFor(h.weight, capital, PRICES[h.ticker] ? PRICES[h.ticker][prevRow.idx] : null)));
@@ -1045,7 +1003,7 @@ function renderLedgerDetail() {
   const attributionRows = r.attribution.slice().sort((a, b) => (b.contribution || 0) - (a.contribution || 0)).map(a => `
     <tr>
       <td><b>${a.ticker}</b></td>
-      <td style="color:var(--ink-faint);">${a.isEntryDay ? '開盤至收盤(進場日)' : a.isCloseEntryDay ? '收盤成交(進場日，當日不計報酬)' : '收盤至收盤'}</td>
+      <td style="color:var(--ink-faint);">${a.isEntryDay ? '開盤至收盤(進場日)' : '收盤至收盤'}</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
       <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
       <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
@@ -1061,10 +1019,10 @@ function renderLedgerDetail() {
     <div class="brief-panel">
       <div class="brief-eyebrow">Trader Opening Brief</div>
       <h4>當日開盤操作清單</h4>
-      <div class="brief-line">${r.date} 目前查看${versionLabel}版本；訊號於前一交易日新聞公開後形成，隔日以${isOpenVersion ? '開盤價' : '收盤價'}執行。</div>
+      <div class="brief-line">${r.date}：訊號公布後於下一交易日開盤價執行。</div>
       <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「張數」欄位依當日收盤價換算整股（1張=1,000股，無條件捨去）。</div>
-      ${r.buys.length === 0 && r.sells.length === 0 ? `<div class="brief-line">${versionLabel}版本今日無再平衡交易。</div>` : ''}
-      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。${isOpenVersion ? '進場當天報酬只計算「開盤買進→收盤」這段，前一交易日收盤到今天開盤的跳空不計入策略報酬。' : ''}</div>
+      ${r.buys.length === 0 && r.sells.length === 0 ? '<div class="brief-line">今日無再平衡交易。</div>' : ''}
+      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。進場當天報酬只計算「開盤買進→收盤」這段，前一交易日收盤到今天開盤的跳空不計入策略報酬。</div>
     </div>
 
     <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
@@ -1156,13 +1114,12 @@ function runAndRenderManual(bestExcessInfo) {
   const p = readParams();
   const start = document.getElementById('p-start').value;
   const end = document.getElementById('p-end').value;
-  const { rows, summary } = runBacktest({ ...p, fillPrice: 'close' }, start, end);
-  const openResult = HAS_OPEN_DATA ? runBacktest({ ...p, fillPrice: 'open' }, start, end) : { rows: [], summary: null };
-  renderCards(summary, openResult.summary, bestExcessInfo || LAST_BEST_EXCESS);
+  const { rows, summary } = runBacktest(p, start, end);
+  renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS);
   renderCoverage();
-  renderCurve(rows, openResult.rows.length ? openResult.rows : null);
-  renderLedger(rows, openResult.rows);
-  return { rows, summary, openRows: openResult.rows, openSummary: openResult.summary };
+  renderCurve(rows);
+  renderLedger(rows);
+  return { rows, summary };
 }
 
 document.getElementById('run-btn').addEventListener('click', () => runAndRenderManual());
@@ -1227,7 +1184,6 @@ function applyParamsToForm(p) {
   document.getElementById('p-maxPositions').value = p.maxPositions;
   document.getElementById('p-sizing').value = p.sizingMode;
   document.getElementById('composite-params').style.display = p.sizingMode === 'composite' ? '' : 'none';
-  if (p.fillPrice) document.getElementById('p-fillPrice').value = p.fillPrice;
 }
 
 let LAST_BEST_EXCESS = null;
@@ -1270,27 +1226,14 @@ document.getElementById('strict-search-btn').addEventListener('click', () => {
   const { summary: validSummary } = runBacktest(best.params, validStart, validEnd);
   const { summary: testSummary } = runBacktest(best.params, testStart, testEnd);
   const fullResult = runBacktest(best.params, '2023-01-01', testEnd);
-  LAST_BEST_EXCESS = { excess: fullResult.summary ? fullResult.summary.excessReturnPct : null, sub: `目前參數全期間 · 收盤版本 · ${fullResult.trades.length} 筆權重調整` };
-
-  // 開盤版本：同一套訓練/驗證/測試流程，獨立搜參數(收盤/開盤的最佳持有天數、持股數、配置法不一定相同)
-  let openBest = null, openValidSummary = null, openTestSummary = null;
-  if (HAS_OPEN_DATA) {
-    const openBase = { ...base, fillPrice: 'open' };
-    const openTrainResults = runGridSearch(openBase, trainStart, trainEnd);
-    if (openTrainResults.length) {
-      openBest = openTrainResults[0];
-      const r1 = runBacktest(openBest.params, validStart, validEnd);
-      const r2 = runBacktest(openBest.params, testStart, testEnd);
-      openValidSummary = r1.summary; openTestSummary = r2.summary;
-    }
-  }
+  LAST_BEST_EXCESS = { excess: fullResult.summary ? fullResult.summary.excessReturnPct : null, sub: `訓練期最佳參數套用全期間 · ${fullResult.trades.length} 筆權重調整` };
 
   out.innerHTML = '';
   const recGrid = document.createElement('div');
   recGrid.className = 'recommend-grid';
   recGrid.innerHTML = `
     <div class="recommend-card">
-      <h4>隔日收盤推薦 <span class="pill-badge safe">樣本外驗證</span></h4>
+      <h4>隔日開盤推薦 <span class="pill-badge safe">樣本外驗證</span></h4>
       <div class="mini-stat-row">
         <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${best.summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(best.summary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(best.summary.totalTaiexReturnPct)} · 超額 ${fmtPct(best.summary.excessReturnPct)}</div></div>
         <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${validSummary && validSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(validSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(validSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(validSummary?.excessReturnPct)}</div></div>
@@ -1298,33 +1241,9 @@ document.getElementById('strict-search-btn').addEventListener('click', () => {
       </div>
       <div class="param-summary-line">${paramSummaryLabel(best.params)}</div>
       <div class="recommend-actions">
-        <button class="btn secondary small" id="btn-rec-close-test">只看 2026 最終測試</button>
-        <button class="btn secondary small" id="btn-rec-close-full">套用全期間</button>
+        <button class="btn secondary small" id="btn-rec-test">只看 2026 最終測試</button>
+        <button class="btn secondary small" id="btn-rec-full">套用全期間</button>
       </div>
-    </div>
-    <div class="recommend-card">
-      <h4>隔日開盤推薦 <span class="pill-badge safe">樣本外驗證</span></h4>
-      ${openBest ? `
-      <div class="mini-stat-row">
-        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${openBest.summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(openBest.summary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(openBest.summary.totalTaiexReturnPct)} · 超額 ${fmtPct(openBest.summary.excessReturnPct)}</div></div>
-        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${openValidSummary && openValidSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(openValidSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(openValidSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(openValidSummary?.excessReturnPct)}</div></div>
-        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value ${openTestSummary && openTestSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(openTestSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(openTestSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(openTestSummary?.excessReturnPct)}</div></div>
-      </div>
-      <div class="param-summary-line">${paramSummaryLabel(openBest.params)}</div>
-      <div class="recommend-actions">
-        <button class="btn secondary small" id="btn-rec-open-test">只看 2026 最終測試</button>
-        <button class="btn secondary small" id="btn-rec-open-full">套用全期間</button>
-      </div>` : `
-      <div class="mini-stat-row">
-        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">訓練期找不到有效組合</div></div>
-        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">—</div></div>
-        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value muted" style="color:var(--ink-faint);">—</div><div class="sub">—</div></div>
-      </div>
-      <div class="param-summary-line">這段區間開盤價資料不足以搜出有效參數組合。</div>
-      <div class="recommend-actions">
-        <button class="btn secondary small" disabled>只看 2026 最終測試</button>
-        <button class="btn secondary small" disabled>套用全期間</button>
-      </div>`}
     </div>`;
   out.appendChild(recGrid);
 
@@ -1341,41 +1260,25 @@ document.getElementById('strict-search-btn').addEventListener('click', () => {
   renderGridTable(trainTable, trainResults);
   out.appendChild(trainTableWrap);
 
-  document.getElementById('btn-rec-close-full').onclick = () => {
+  document.getElementById('btn-rec-full').onclick = () => {
     applyParamsToForm(best.params);
     document.getElementById('p-start').value = '2023-01-01';
     document.getElementById('p-end').value = testEnd;
     runAndRenderManual(LAST_BEST_EXCESS);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  document.getElementById('btn-rec-close-test').onclick = () => {
+  document.getElementById('btn-rec-test').onclick = () => {
     applyParamsToForm(best.params);
     document.getElementById('p-start').value = testStart;
     document.getElementById('p-end').value = testEnd;
     runAndRenderManual(LAST_BEST_EXCESS);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  if (openBest) {
-    document.getElementById('btn-rec-open-full').onclick = () => {
-      applyParamsToForm(openBest.params);
-      document.getElementById('p-start').value = '2023-01-01';
-      document.getElementById('p-end').value = testEnd;
-      runAndRenderManual(LAST_BEST_EXCESS);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-    document.getElementById('btn-rec-open-test').onclick = () => {
-      applyParamsToForm(openBest.params);
-      document.getElementById('p-start').value = testStart;
-      document.getElementById('p-end').value = testEnd;
-      runAndRenderManual(LAST_BEST_EXCESS);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-  }
 
-  renderCards(LAST_RUN_SUMMARY, LAST_RUN_OPEN_SUMMARY, LAST_BEST_EXCESS);
+  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
 });
 
-let LAST_RUN_SUMMARY = null, LAST_RUN_OPEN_SUMMARY = null;
+let LAST_RUN_SUMMARY = null;
 
 // ============================================================================
 // 啟動
@@ -1386,9 +1289,8 @@ let LAST_RUN_SUMMARY = null, LAST_RUN_OPEN_SUMMARY = null;
     document.getElementById('loading-banner').style.display = 'none';
     document.getElementById('main-content').style.display = '';
     document.getElementById('composite-params').style.display = '';
-    const { summary, openSummary } = runAndRenderManual();
+    const { summary } = runAndRenderManual();
     LAST_RUN_SUMMARY = summary;
-    LAST_RUN_OPEN_SUMMARY = openSummary;
     document.getElementById('strict-search-btn').click();
   } catch (err) {
     document.getElementById('loading-banner').style.display = 'none';

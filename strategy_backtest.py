@@ -15,6 +15,10 @@
       不用進場價本身，因為進場價已經反映訊號公布後市場的反應，拿它當分母會低估真正的上漲空間)。
       2026-07-28：原本另外還有一個不用股價的"change"版((新目標價-舊目標價)/舊目標價)，
       經使用者確認不需要，已移除，只留股價版這一種算法。
+    - 成交價格：2026-07-28確認固定用「下一交易日開盤價」進場，不分新聞公布時間點、不做收盤/
+      開盤兩版對照——一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的
+      重新平衡，不會有「這則訊號用收盤價、那則用開盤價」的情況。原本按新聞時間(13:30前後)分流
+      收盤/開盤的設計已廢棄不用。
     - avg_rule="tier3"：本次調升幅度或分析師數「高於」該股歷史平均→加碼；
       「低於」平均→維持原權重，不加碼也不出場(不是PDF的連續分數排名式，是使用者要的三段式邏輯)
     - max_portfolio_exposure：投組層級總曝險上限(PDF只有單檔上限，沒有整體曝險上限)
@@ -27,9 +31,9 @@
 
 2026-07-28更新：股價/大盤資料改直接從Supabase讀(stock_prices/taiex_index表，透過
 get_strategy_price_bundle() RPC一次拉回)，不再讀本機的factset_data/prices_full.json——
-這樣這支研究腳本跟網站的strategy.html用同一份資料來源，不會兩邊對不起來。開盤價也已經支援：
-fill_price="open"時，進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤；
-出場當天(不論收盤/開盤版本)沿用既有簡化，當天不計入報酬(部位直接從當日報酬迴圈移除)。
+這樣這支研究腳本跟網站的strategy.html用同一份資料來源，不會兩邊對不起來。進場固定用開盤價：
+進場當天只計算「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤；出場當天沿用既有簡化，
+當天不計入報酬(部位直接從當日報酬迴圈移除)。
 """
 from __future__ import annotations
 
@@ -109,14 +113,9 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
     ev = events[events["direction"] == "UP"].copy()
     ev = ev.sort_values(["ticker", "date"]).reset_index(drop=True)
 
+    # 固定用下一交易日開盤價進場，不分新聞公布時間點。
     ev["entry_date"] = ev["date"].apply(lambda d: next_trading_day(d, calendar))
     ev = ev.dropna(subset=["entry_date"]).copy()
-
-    def entry_price_close(row):
-        ser = stock_price.get(row["ticker"])
-        if ser is None:
-            return np.nan
-        return ser.get(row["entry_date"], np.nan)
 
     def entry_price_open(row):
         ser = stock_price_open.get(row["ticker"])
@@ -135,12 +134,11 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
             return np.nan
         return ser.get(calendar[pos - 1], np.nan)
 
-    ev["entry_price_close"] = ev.apply(entry_price_close, axis=1)
-    ev = ev.dropna(subset=["entry_price_close"]).copy()
-    ev["entry_price_open"] = ev.apply(entry_price_open, axis=1)
+    ev["entry_price"] = ev.apply(entry_price_open, axis=1)
+    ev = ev.dropna(subset=["entry_price"]).copy()
     ev["entry_prev_close"] = ev.apply(entry_prev_close, axis=1)
 
-    # 上漲空間固定用進場前一天收盤價當基準，跟實際成交用開盤/收盤無關
+    # 上漲空間固定用進場前一天收盤價當基準
     ev["upside_price"] = (ev["new_target"] - ev["entry_prev_close"]) / ev["entry_prev_close"]
 
     # 歷史平均：只用「這筆事件之前」該股票的調升幅度/分析師數(expanding shift(1))，
@@ -177,7 +175,6 @@ class StrategyParams:
     avg_rule: Literal["none", "tier3"] = "none"
     avg_boost_mult: float = 1.5             # tier3高於平均時的加碼倍數
 
-    fill_price: Literal["open", "close"] = "close"
     enable_rank_eviction: bool = False      # 被更高分數股票擠出排名(PDF有，本版預設關閉)
 
 
@@ -186,9 +183,8 @@ class StrategyParams:
 # ----------------------------------------------------------------------------
 
 def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    entry_col = "entry_price_open" if p.fill_price == "open" else "entry_price_close"
     mask = (
-        ev[entry_col].notna()
+        ev["entry_price"].notna()
         & ev["upside_price"].notna()
         & (ev["target_change_pct"] >= p.min_upgrade_pct)
         & (ev["analyst_count"] >= p.min_analyst_count)
@@ -196,7 +192,7 @@ def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     )
     out = ev[mask].copy()
     out["upside_used"] = out["upside_price"]
-    out["entry_price_used"] = out[entry_col]
+    out["entry_price_used"] = out["entry_price"]
     return out
 
 
@@ -292,10 +288,10 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     # 預先算好每檔股票的日報酬序列，不要在逐日迴圈裡對整條序列重算pct_change()，
     # 200多檔股票、900多個交易日，迴圈裡重算會慢上好幾個量級。
     stock_ret = {t: ser.pct_change(fill_method=None) for t, ser in stock_price.items()}
-    # 開盤成交版本：進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤
-    # (訊號隔日開盤才成交，當天開盤前的變動沒有參與到)；進場後第二天起跟收盤版一樣用stock_ret。
+    # 進場當天用「開盤買進→收盤」的報酬，不是完整一天的收盤對收盤
+    # (訊號隔日開盤才成交，當天開盤前的變動沒有參與到)；進場後第二天起用stock_ret。
     stock_ret_open_entry = {}
-    if p.fill_price == "open" and stock_price_open:
+    if stock_price_open:
         for t, close_ser in stock_price.items():
             open_ser = stock_price_open.get(t)
             if open_ser is None:
@@ -360,14 +356,10 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         holdings[t]["weight"] = new_weights[t]
 
         # --- 當日報酬(固定資本100，權重在持有期間不因股價變動而複利滾動) ---
-        # 收盤成交版本進場當天是收盤才成交，當天完全沒有部位曝險，報酬算0，隔天才開始計入
-        # (跟出場當天不計報酬是同一個道理，兩者都要排除)。
         daily_ret = 0.0
         for t, h in holdings.items():
             is_entry_day = h["entry_date"] == day
-            if is_entry_day and p.fill_price == "close":
-                continue
-            rser = stock_ret_open_entry.get(t) if (is_entry_day and p.fill_price == "open") else stock_ret.get(t)
+            rser = stock_ret_open_entry.get(t) if is_entry_day else stock_ret.get(t)
             if rser is None:
                 continue
             r = rser.get(day, np.nan)
