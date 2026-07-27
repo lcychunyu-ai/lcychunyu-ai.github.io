@@ -144,10 +144,14 @@ def parse_article(item):
     soup = BeautifulSoup(content_html, "html.parser")
     full_text = soup.get_text()
 
+    news_dt = datetime.fromtimestamp(item["publishAt"], tz=TZ_TW)
     row = {
         "source_url": f"https://news.cnyes.com/news/id/{item['newsId']}",
         "event_type": None,
-        "news_time": datetime.fromtimestamp(item["publishAt"], tz=TZ_TW).isoformat(),
+        "news_time": news_dt.isoformat(),
+        # news_time_taipei：news_time拆出來的台北時區時分秒(date欄位已經是拆出來的日期部分)，
+        # 這樣下游不用每次都重新做時區轉換就能直接拿到「幾點幾分」。
+        "news_time_taipei": news_dt.strftime("%H:%M:%S"),
         "market": "TW",
         "ticker": m_target.group("code"),
         "company": m_target.group("name"),
