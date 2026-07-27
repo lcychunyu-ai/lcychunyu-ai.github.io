@@ -252,8 +252,6 @@ class StrategyParams:
     avg_rule: Literal["none", "tier3"] = "none"
     avg_boost_mult: float = 1.5             # tier3高於平均時的加碼倍數
 
-    enable_rank_eviction: bool = False      # 被更高分數股票擠出排名(PDF有，本版預設關閉)
-
 
 # ----------------------------------------------------------------------------
 # 4. 篩選 + 權重分配
