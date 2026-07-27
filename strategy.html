@@ -299,7 +299,7 @@
             <option value="equal">等權</option>
             <option value="by_upgrade">調升幅度加權</option>
             <option value="composite" selected>原始綜合分數</option>
-            <option value="multifactor" disabled>第二代多因子（即將推出）</option>
+            <option value="multifactor">第二代多因子</option>
           </select>
         </div>
 
@@ -313,8 +313,9 @@
             <p><b>原始綜合分數</b></p>
             <span class="formula">分數 = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
             <p style="margin:6px 0 0; font-size:11px;">分數除以總分得到權重，再套用單檔上限與最大持股數。∝ 表示按比例分配。</p>
-            <p style="margin-top:8px;"><b>第二代多因子</b>（即將推出）</p>
-            <span class="formula" style="margin-bottom:0;">異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
+            <p style="margin-top:8px;"><b>第二代多因子</b></p>
+            <span class="formula" style="margin-bottom:0;">分數 = 異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
+            <p style="margin:6px 0 0; font-size:11px;">異常調升：本次調升幅度相對該股歷史平均的標準化程度；相對動能：進場前20個交易日報酬，跟同一批候選的中位數比；波動率：同一段期間的日報酬標準差，缺值用同批中位數補。</p>
           </div>
         </details>
 
@@ -469,6 +470,13 @@ function stdSample(arr) {
   const v = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / (arr.length - 1);
   return Math.sqrt(v);
 }
+// 中位數，跳過null/undefined(對照pandas .median()預設skipna=True)
+function medianSkipNull(arr) {
+  const vals = arr.filter(v => v != null).slice().sort((a, b) => a - b);
+  if (vals.length === 0) return null;
+  const mid = Math.floor(vals.length / 2);
+  return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+}
 
 // 進場時機規則(唯一策略)：不分新聞公布時間點，一律用下一交易日「開盤價」進場——
 // 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡，
@@ -606,6 +614,51 @@ function scoreOne(c, p) {
   return Math.max(base, 0);
 }
 
+// 第二代多因子：異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率。
+// 跟其他配置方式不同，這個算法要看「同一天整批候選」的相對排名(動能相對中位數、波動率
+// 缺值用同批中位數補)，不是單一候選就能算完，所以獨立成batch版本，不能用scoreOne逐檔算。
+function scoreMultifactorBatch(cands, p) {
+  const mom = [], vol = [];
+  for (const c of cands) {
+    const priceArr = PRICES[c.ticker];
+    if (!priceArr) { mom.push(0); vol.push(null); continue; }
+    const window = priceArr.slice(Math.max(0, c.entryIdx - 20), c.entryIdx);
+    const rets = [];
+    for (let i = 1; i < window.length; i++) {
+      if (window[i] != null && window[i - 1] != null && window[i - 1] !== 0) {
+        rets.push((window[i] - window[i - 1]) / window[i - 1]);
+      }
+    }
+    mom.push(rets.length ? rets.reduce((a, b) => a + b, 0) : 0);
+    vol.push(rets.length > 1 ? stdSample(rets) : null);
+  }
+  const volMedian = medianSkipNull(vol);
+  let volFilled = vol.map(v => v == null ? volMedian : v);
+  const positiveVols = volFilled.filter(v => v != null && v > 0);
+  const volFloor = positiveVols.length ? Math.min(...positiveVols) : 0.01;
+  volFilled = volFilled.map(v => (v == null || v === 0) ? volFloor : v);
+  const momMedian = medianSkipNull(mom) || 0;
+
+  return cands.map((c, idx) => {
+    const zRaw = (c.histAvgChange != null && c.histStdChange != null && c.histStdChange !== 0)
+      ? (c.targetChangePct - c.histAvgChange) / c.histStdChange
+      : 0;
+    const zChange = Math.min(Math.max(zRaw, -3), 3) + 3.1;
+    const logAnalyst = Math.log1p(c.analystCount);
+    const upside = Math.max(c.upsideUsed, 0.001);
+    const streakFactor = 1.0 + Math.min(c.streak, 10) * 0.05;
+    const momFactor = Math.max(mom[idx] - momMedian, -0.5) + 0.51;
+    let base = zChange * logAnalyst * upside * momFactor * streakFactor / volFilled[idx];
+
+    if (p.avgRule === 'tier3') {
+      const changeBoost = c.histAvgChange != null && c.targetChangePct > c.histAvgChange;
+      const analystBoost = c.histAvgAnalyst != null && c.analystCount > c.histAvgAnalyst;
+      if (changeBoost || analystBoost) base *= p.avgBoostMult;
+    }
+    return Math.max(base, 0);
+  });
+}
+
 // scoresArr: [{ticker,score}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
 function allocateWeights(scoresArr, p) {
   const sumAll = scoresArr.reduce((s, x) => s + x.score, 0);
@@ -675,7 +728,12 @@ function runBacktest(p, startDate, endDate) {
       const todaysAll = entriesByIdx.get(i).filter(c => !holdings.has(c.ticker));
       if (todaysAll.length > 0) {
         const scoreMap = new Map(); // ticker -> {score, ref} (keep last, 對照pandas duplicated keep='last')
-        todaysAll.forEach(c => scoreMap.set(c.ticker, { score: scoreOne(c, p), ref: c }));
+        if (p.sizingMode === 'multifactor') {
+          const scores = scoreMultifactorBatch(todaysAll, p);
+          todaysAll.forEach((c, idx) => scoreMap.set(c.ticker, { score: scores[idx], ref: c }));
+        } else {
+          todaysAll.forEach(c => scoreMap.set(c.ticker, { score: scoreOne(c, p), ref: c }));
+        }
         const combined = [];
         for (const t of holdings.keys()) combined.push({ ticker: t, score: 0 });
         for (const [t, v] of scoreMap) combined.push({ ticker: t, score: v.score });
