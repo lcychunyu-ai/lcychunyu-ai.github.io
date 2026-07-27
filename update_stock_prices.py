@@ -2,8 +2,10 @@
 每日排程用：抓個股開盤價/收盤價+台股加權指數開盤/收盤，upsert寫入Supabase的stock_prices/taiex_index。
 用service_role key(不受RLS限制)，只在GitHub Actions這種受信任的後端環境使用，絕不能放進前端網頁。
 
-用yfinance的auto_adjust=True，open/close都是還原股價(已內含除權息調整)，不是原始未調整價格——
-這樣個股配息、減資、股票分割不會在報酬率序列裡製造假的價格跳空，是回測用途的正確選擇。
+2026-07-28更新：改用yfinance的auto_adjust=False，open/close是原始未調整價格，不是還原股價。
+原本用還原股價(auto_adjust=True)理論上比較「正確」(內含除權息調整，不會製造假跳空)，但為了
+讓strategy.html/strategy_backtest.py回測結果能跟同事獨立實作(Node.js版本，用原始股價)的數字
+完全對齊、方便交叉驗證，改成跟他一致的原始股價。這是資料口徑的選擇，不是誰對誰錯。
 
 股票清單不是寫死的名單，是直接查Supabase的factset_revisions撈「歷史上出現過目標價/EPS修正新聞的所有ticker」，
 這樣就算換一台電腦、換一個人接手，只要有這組service_role key，重跑這支腳本就能拿到完整正確的追蹤清單，
@@ -86,7 +88,7 @@ def main():
         ok = False
         for suf in suffixes:
             try:
-                df = yf.download(f"{t}{suf}", start=start_date, end=end_date, progress=False, auto_adjust=True)
+                df = yf.download(f"{t}{suf}", start=start_date, end=end_date, progress=False, auto_adjust=False)
                 if df.empty:
                     continue
                 close, open_ = df["Close"], df["Open"]
@@ -118,7 +120,7 @@ def main():
         upsert_batch("stock_prices", price_rows, "ticker,date")
         print("stock_prices upsert 完成")
 
-    taiex_df = yf.download("^TWII", start=start_date, end=end_date, progress=False, auto_adjust=True)
+    taiex_df = yf.download("^TWII", start=start_date, end=end_date, progress=False, auto_adjust=False)
     tclose, topen = taiex_df["Close"], taiex_df["Open"]
     if hasattr(tclose, "columns"):
         tclose = tclose.iloc[:, 0]
