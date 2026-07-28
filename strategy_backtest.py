@@ -654,13 +654,21 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
 
         daily_ret = overnight_ret + intraday_ret
 
+        # 2026-07-28修正：taiex_ret是對「全部歷史」(calendar，2021年至今)一次算好的
+        # pct_change()全域序列，不是針對這次回測視窗算的。如果視窗起始日不是calendar裡
+        # 最早的那天，taiex_ret.get(day)在視窗第一天算的是「視窗外前一天到視窗第一天」這段
+        # 報酬，會被誤算進這次回測的大盤累積報酬——同事backtest.js用區域變數previousBenchmark
+        # (每次回測重新歸零)天生沒這個問題，這裡用視窗起點強制歸零對齊：視窗第一天的大盤
+        # 報酬永遠算0，不看taiex_ret.get(day)實際值是多少。
+        taiex_ret_today = 0.0 if day_idx == 0 else taiex_ret.get(day, np.nan)
+
         rows.append({
             "date": day,
             "holdings": ",".join(weight_now.keys()),
             "n_positions": len(weight_now),
             "exposure": sum(weight_now.values()),
             "daily_return": daily_ret,
-            "taiex_return": taiex_ret.get(day, np.nan),
+            "taiex_return": taiex_ret_today,
         })
 
     book = pd.DataFrame(rows).set_index("date")

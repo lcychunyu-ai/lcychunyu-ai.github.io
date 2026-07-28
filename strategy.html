@@ -1048,7 +1048,15 @@ function runBacktest(p, startDate, endDate) {
       attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, isEntryDay });
     }
     const dailyRet = overnightRet + intradayRet;
-    const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
+    // 2026-07-28修正：TAIEX_RET是loadAll()時對「全部歷史」一次算好的全域陣列(2021年至今)，
+    // 不是針對「這次回測視窗」算的。如果回測起始日不是資料庫裡最早的那天(例如startDate=
+    // 2023-01-01，但DATES其實從2021年就有資料)，TAIEX_RET[startIdx]算的是「視窗外前一天
+    // (可能是2022年底)到視窗第一天」這段報酬，會被誤算進這次回測的大盤累積報酬——實測
+    // 全期間2023-01-01~2026-07-24的大盤報酬因此從120.37%被灌水到120.99%，多算了視窗外
+    // 那一天的報酬。同事backtest.js第166行用區域變數previousBenchmark(每次回測重新歸零)
+    // 天生沒這個問題，我們這裡用window起點強制歸零來對齊：視窗第一天的大盤報酬永遠算0，
+    // 不看TAIEX_RET[startIdx]實際值是多少。
+    const taiexRet = i === startIdx ? 0 : (TAIEX_RET[i] != null ? TAIEX_RET[i] : 0);
 
     rows.push({
       idx: i, date: day,
