@@ -551,6 +551,11 @@ function computeRevisionHistory(events) {
     const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
     return ta.localeCompare(tb);
   });
+  // 2026-07-28修正：out原本用`${ticker}|${pubDate}`(只到日期)當key——如果同一檔股票同一天
+  // 發布兩篇「執行窗口不同」的獨立新聞(例如一篇09:00前發布當天執行、另一篇09:00後發布隔天
+  // 執行，兩篇都合法存活過跨方向去重)，這兩篇的pubDate字串剛好相同，key就會撞在一起，
+  // 後處理的那篇會把前一篇算好的abnormalRevision/recentUpgrades60直接覆蓋掉。改用
+  // `${ticker}|${執行窗口idx}`當key——這正是latestByWindow保證彼此不重複的欄位，不會再撞。
   const priorRevisions = new Map(); // ticker -> [{date, absValue}]
   const priorUpgrades = new Map();  // ticker -> [date]
   const out = new Map();
@@ -568,7 +573,7 @@ function computeRevisionHistory(events) {
     const cutoff60 = new Date(Date.parse(pubDate + 'T00:00:00Z') - 60 * dayMs).toISOString().slice(0, 10);
     const recentUpgrades60 = 1 + ups.filter(d => d < pubDate && d >= cutoff60).length;
 
-    out.set(`${ticker}|${pubDate}`, { abnormalRevision, recentUpgrades60 });
+    out.set(`${ticker}|${e._execIdx}`, { abnormalRevision, recentUpgrades60 });
 
     revs.push({ date: pubDate, absValue: Math.abs(revisionDecimal) });
     priorRevisions.set(ticker, revs);
@@ -637,7 +642,7 @@ function prepareEvents(events) {
       const benchRet = taiexWindow[taiexWindow.length - 1] / taiexWindow[0] - 1;
       relativeMomentum20 = momentum20 - benchRet;
     }
-    const revHist = revisionHistory.get(`${e.ticker}|${e.date}`) || { abnormalRevision: 1.0, recentUpgrades60: 1 };
+    const revHist = revisionHistory.get(`${e.ticker}|${entryIdx}`) || { abnormalRevision: 1.0, recentUpgrades60: 1 };
 
     out.push({
       ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],

@@ -219,14 +219,20 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
     all_ev = all_ev[~all_ev.duplicated(subset=["ticker", "execute_date"], keep="last")]
     all_ev = all_ev.sort_values("publish_ts").reset_index(drop=True)
 
-    entry_date_by_key = dict(zip(zip(ev["ticker"], ev["date"]), ev["entry_date"]))
-
+    # 2026-07-28修正：out_rows原本用(ticker,發布日期)當key——如果同一檔股票同一天發布兩篇
+    #「執行窗口不同」的獨立新聞(例如一篇09:00前發布當天執行、另一篇09:00後發布隔天執行，
+    # 兩篇都合法存活過跨方向去重)，這兩篇的pub_date(只到日期，不含時間)剛好相同，字典
+    # key就會撞在一起，後處理的那篇會把前一篇算好的abnormal_revision/recent_upgrades_60
+    # 直接覆蓋掉，導致其中一篇拿到完全錯誤(通常是另一篇的)基準值。改用(ticker,execute_date)
+    # 當key——這正是_dedupe_by_execution_window保證彼此不重複的欄位，不會再撞。動能/波動率
+    # 的進場價位窗口也直接用這一列自己算出來的execute_date，不用另外查表(順便去掉一個
+    # 一樣有撞key風險的entry_date_by_key)。
     prior_revisions: dict[str, list] = {}
     prior_upgrades: dict[str, list] = {}
     out_rows = {}
 
     for _, row in all_ev.iterrows():
-        ticker, pub_date = row["ticker"], row["date"]
+        ticker, pub_date, execute_date = row["ticker"], row["date"], row["execute_date"]
         revs = prior_revisions.setdefault(ticker, [])
         cutoff365 = pub_date - pd.Timedelta(days=365)
         base_vals = [v for d, v in revs if d < pub_date and d >= cutoff365]
@@ -237,11 +243,10 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
         cutoff60 = pub_date - pd.Timedelta(days=60)
         recent_up = 1 + sum(1 for d in ups if d < pub_date and d >= cutoff60)
 
-        entry_date = entry_date_by_key.get((ticker, pub_date))
         mom = rel_mom = 0.0
         vol = 0.35
-        if entry_date is not None and entry_date in calendar:
-            pos = calendar.get_loc(entry_date)
+        if execute_date is not None and execute_date in calendar:
+            pos = calendar.get_loc(execute_date)
             ser = stock_price.get(ticker)
             window = ser.iloc[max(0, pos - 21):pos].dropna() if ser is not None else pd.Series(dtype=float)
             bench_window = taiex.iloc[max(0, pos - 21):pos]
@@ -254,13 +259,13 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
                 bench_ret = bench_window.iloc[-1] / bench_window.iloc[0] - 1
                 rel_mom = mom - bench_ret
 
-        out_rows[(ticker, pub_date)] = (abnormal, recent_up, mom, rel_mom, vol)
+        out_rows[(ticker, execute_date)] = (abnormal, recent_up, mom, rel_mom, vol)
 
         revs.append((pub_date, abs(row["revision"])))
         if row["direction"] == "UP":
             ups.append(pub_date)
 
-    keys = list(zip(ev["ticker"], ev["date"]))
+    keys = list(zip(ev["ticker"], ev["entry_date"]))
     ev["abnormal_revision"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[0] for k in keys]
     ev["recent_upgrades_60"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[1] for k in keys]
     ev["momentum_20"] = [out_rows.get(k, (1.0, 1, 0.0, 0.0, 0.35))[2] for k in keys]
