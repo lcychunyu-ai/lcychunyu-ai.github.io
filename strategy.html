@@ -131,6 +131,14 @@
   }
   fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px 6px; margin: 0 0 14px; }
   legend { font-size: 10.5px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 6px; }
+  .date-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+  .date-presets button {
+    font-size: 11px; font-weight: 600; color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 100px; padding: 4px 10px; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .date-presets button:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .date-presets button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
   .btn {
     font-size: 13.5px; font-weight: 700; color: var(--bg); background: var(--ink);
@@ -207,13 +215,6 @@
   .pill-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 100px; margin-left: 8px; vertical-align: middle; }
   .pill-badge.safe { background: var(--safe-dim); color: var(--safe); }
   .pill-badge.caution { background: var(--warn-dim); color: var(--warn); }
-  .stability-components { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
-  .stability-item { font-size: 11px; }
-  .stability-item .row { display: flex; justify-content: space-between; margin-bottom: 5px; color: var(--ink-dim); }
-  .stability-item .row b { color: var(--ink); font-family: ui-monospace, monospace; }
-  .stability-item .bar { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
-  .stability-item .bar em { display: block; height: 100%; background: var(--accent); }
-  @media (max-width: 640px) { .stability-components { grid-template-columns: repeat(2, 1fr); } }
 
   .recommend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 820px) { .recommend-grid { grid-template-columns: 1fr; } }
@@ -292,6 +293,13 @@
 
         <fieldset>
           <legend>回測期間</legend>
+          <div class="date-presets" id="date-presets">
+            <button type="button" data-preset="all">全部區間</button>
+            <button type="button" data-preset="train">訓練期 2023-2024</button>
+            <button type="button" data-preset="valid">驗證期 2025</button>
+            <button type="button" data-preset="test">測試期 2026至今</button>
+            <button type="button" data-preset="1y">近1年</button>
+          </div>
           <div class="param-row2">
             <div class="param-field"><label>開始日期</label><input type="date" id="p-start" value="2023-01-01"/></div>
             <div class="param-field" style="margin-bottom:0;"><label>結束日期</label><input type="date" id="p-end" value="2026-12-31"/></div>
@@ -330,7 +338,7 @@
             </select>
           </div>
 
-          <details class="explainer-toggle" open>
+          <details class="explainer-toggle">
             <summary>配置方式怎麼計算？</summary>
             <div class="explainer" style="margin-top:10px;">
               <p><b>進階多因子（推薦）</b></p>
@@ -390,16 +398,6 @@
           <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>我們的策略</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
           <div id="curve-holder"></div>
         </div>
-
-        <!-- ===== HISTORICAL ROBUSTNESS ===== -->
-        <section class="section-card">
-          <div class="section-head">
-            <div><span class="eyebrow">Historical Robustness</span><h3>本次回測穩定度</h3></div>
-            <div style="text-align:right;"><span id="stability-score" class="mono" style="font-size:20px; font-weight:700;">—</span><div id="stability-grade" style="font-size:11px; color:var(--ink-faint);">等待回測</div></div>
-          </div>
-          <div id="stability-components" class="stability-components"></div>
-          <p id="stability-warning" style="font-size:11px; color:var(--ink-faint); margin-top:10px;">穩定度用來防止只看高報酬；它不是未來勝率。</p>
-        </section>
 
         <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
         <section class="section-card accent-safe">
@@ -633,6 +631,16 @@ function computeRevisionHistory(events) {
   }
   return out;
 }
+
+// 2026-07-28查證：優化器分段(訓練2023-2024/驗證2025/測試2026)算出來的數字跟同事的對不
+// 上，根因是他optimizer.js的loadData()——股價/大盤資料只回溯段落起始日往前140天，這個
+// 140天限制透過「文章發布時間能不能對應到有效交易日曆」這一層，連帶讓異常調升需要的365天
+// 歷史基準也被截斷，即使他的文章查詢本身用了370天緩衝也沒用(執行日期解析在140天緩衝之外
+// 會直接失敗、整篇文章被丟掉，從沒機會用到370天緩衝)。這是他自己程式碼兩個緩衝天數沒對齊
+// 造成的行為，不是我們算錯，用他backtest.js直接算過某個真實案例(1319, 2026-01-19)精確
+// 重現這個機制。但嘗試在我們的優化器複製這個截斷邏輯後，實測驗證期落差反而從1.59pp惡化
+// 到6.72pp，代表還有沒抓到的交互影響，已回退不上線(見runTwoFoldOptimizationAsync的說明)，
+// 保留這段查證紀錄供之後需要時參考。
 
 // 進場成交規則(唯一策略)：不分收盤/開盤版本，一律用執行日的「開盤價」進場——
 // 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
@@ -1163,74 +1171,6 @@ function summarize(rows, trades, orders) {
   };
 }
 
-// ============================================================================
-// 歷史穩健度評分 — 直接對照同事backtest.js的stabilityAssessment()逐項複製：
-// 跨期一致性35分(每季超額報酬是不是穩定為正) + 風險調整25分(Sharpe+回撤) +
-// 參數敏感度25分(鄰近參數微調，結果會不會大幅震盪) + 樣本量15分(交易數+季數夠不夠多)。
-// 這個分數只衡量「歷史上看起來穩不穩」，不是未來勝率的保證。
-// ============================================================================
-function clamp01(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
-
-function stabilityAssessment(baseParams, startDate, endDate, baseResult) {
-  const rows = baseResult.rows;
-  const quarterMap = new Map();
-  for (const r of rows) {
-    const q = `${r.date.slice(0, 4)}Q${Math.floor((Number(r.date.slice(5, 7)) - 1) / 3) + 1}`;
-    if (!quarterMap.has(q)) quarterMap.set(q, []);
-    quarterMap.get(q).push(r);
-  }
-  const periods = [...quarterMap].map(([period, qrows]) => {
-    const strategy = qrows.reduce((s, r) => s + r.dailyReturn, 0);
-    const benchmark = qrows.reduce((s, r) => s + r.taiexReturn, 0);
-    return { period, strategyReturn: strategy, benchmarkReturn: benchmark, excess: strategy - benchmark };
-  });
-  const positive = periods.filter(p => p.excess > 0).length;
-  const positiveRatio = periods.length ? positive / periods.length : 0;
-  const worst = Math.min(0, ...periods.map(p => p.excess));
-  const crossPeriodScore = Math.round(35 * clamp01(0.75 * positiveRatio + 0.25 * clamp01(1 + worst / 0.15, 0, 1), 0, 1) * 10) / 10;
-
-  const sharpe = baseResult.summary.sharpe || 0;
-  const maxDD = baseResult.summary.maxDrawdownPct / 100;
-  const sharpePart = clamp01((sharpe + 0.5) / 2.5, 0, 1);
-  const drawdownPart = clamp01(1 - Math.abs(maxDD) / 0.5, 0, 1);
-  const riskScore = Math.round(25 * (0.6 * sharpePart + 0.4 * drawdownPart) * 10) / 10;
-
-  const variants = [
-    { ...baseParams, minUpgradePct: Math.max(0, baseParams.minUpgradePct - 1) }, { ...baseParams, minUpgradePct: baseParams.minUpgradePct + 1 },
-    { ...baseParams, minUpside: Math.max(-0.5, baseParams.minUpside - 0.02) }, { ...baseParams, minUpside: baseParams.minUpside + 0.02 },
-    { ...baseParams, maxHoldDays: Math.max(1, baseParams.maxHoldDays - 5) }, { ...baseParams, maxHoldDays: baseParams.maxHoldDays + 5 },
-  ];
-  const baseExcess = baseResult.summary.excessReturnPct / 100;
-  const neighborExcess = variants.map(v => { const r = runBacktest(v, startDate, endDate); return r.summary ? r.summary.excessReturnPct / 100 : baseExcess; });
-  const deviations = neighborExcess.map(x => Math.abs(x - baseExcess));
-  const meanDeviation = deviations.reduce((s, x) => s + x, 0) / (deviations.length || 1);
-  const scale = Math.max(0.05, Math.abs(baseExcess));
-  const sensitivityScore = Math.round(25 * clamp01(1 - meanDeviation / scale, 0, 1) * 10) / 10;
-
-  // 2026-07-28修正：同事backtest.js的stats()回傳的tradeCount是trades.length，這個trades
-  // 是逐單完整帳本(notionalTrades，我們現在對應的是orders不是trades)，不是round-trip
-  // 進出場配對數。原本這裡用nTrades(round-trip，數字天生小很多)去對照他用order級距校準
-  // 出來的500/100這兩個門檻，會系統性低估樣本量分數、也更容易誤觸發「交易樣本偏少」警示。
-  const tradeAdequacy = clamp01((baseResult.summary.nOrders ?? baseResult.summary.nTrades) / 500, 0, 1);
-  const periodAdequacy = clamp01(periods.length / 12, 0, 1);
-  const sampleScore = Math.round(15 * (0.55 * tradeAdequacy + 0.45 * periodAdequacy) * 10) / 10;
-
-  const total = Math.round((crossPeriodScore + riskScore + sensitivityScore + sampleScore) * 10) / 10;
-  const grade = total >= 80 ? '穩健' : total >= 65 ? '中等' : total >= 50 ? '偏弱' : '脆弱';
-  const warnings = [];
-  if (positiveRatio < 0.5) warnings.push('超額報酬為正的季度不到一半');
-  if (maxDD < -0.3) warnings.push('最大回撤超過30%');
-  if (sensitivityScore < 15) warnings.push('鄰近參數的結果變化較大');
-  if ((baseResult.summary.nOrders ?? baseResult.summary.nTrades) < 100) warnings.push('交易樣本偏少');
-
-  return {
-    total, grade,
-    components: { crossPeriod: crossPeriodScore, risk: riskScore, parameterSensitivity: sensitivityScore, sampleSize: sampleScore },
-    periods: { total: periods.length, positiveExcess: positive, positiveRatio, worstExcess: worst, rows: periods },
-    neighbors: { count: neighborExcess.length, meanAbsoluteExcessChange: meanDeviation, excessRange: [Math.min(...neighborExcess), Math.max(...neighborExcess)] },
-    warnings,
-  };
-}
 
 // ============================================================================
 // 參數讀取 / 格式化
@@ -1614,27 +1554,6 @@ function exportCsv() {
 // ============================================================================
 // 執行單次回測並更新整個上半部(卡片/涵蓋度/曲線/帳本)
 // ============================================================================
-function renderStability(p, start, end, result) {
-  const scoreEl = document.getElementById('stability-score');
-  const gradeEl = document.getElementById('stability-grade');
-  const compEl = document.getElementById('stability-components');
-  const warnEl = document.getElementById('stability-warning');
-  if (!result.summary || result.rows.length === 0) {
-    scoreEl.textContent = '—'; gradeEl.textContent = '資料不足'; compEl.innerHTML = '';
-    return;
-  }
-  const s = stabilityAssessment(p, start, end, result);
-  scoreEl.textContent = `${s.total.toFixed(1)} / 100`;
-  gradeEl.textContent = s.grade;
-  const parts = [['跨期一致性', s.components.crossPeriod, 35], ['風險調整', s.components.risk, 25], ['參數敏感度', s.components.parameterSensitivity, 25], ['樣本量', s.components.sampleSize, 15]];
-  compEl.innerHTML = parts.map(([label, value, max]) => `
-    <div class="stability-item">
-      <div class="row"><span>${label}</span><b>${value} / ${max}</b></div>
-      <div class="bar"><em style="width:${(value / max * 100).toFixed(1)}%;"></em></div>
-    </div>`).join('');
-  warnEl.textContent = `${s.periods.positiveExcess}/${s.periods.total} 季超額報酬為正 · 最差季度 ${fmtPct(s.periods.worstExcess * 100)} · 鄰近參數超額變動平均 ${fmtPct(s.neighbors.meanAbsoluteExcessChange * 100)}${s.warnings.length ? ` · 警示：${s.warnings.join('、')}` : ' · 未觸發主要警示'}。此分數只衡量歷史穩健度，不是未來獲利機率。`;
-}
-
 function runAndRenderManual(bestExcessInfo) {
   const p = readParams();
   const start = document.getElementById('p-start').value;
@@ -1645,31 +1564,36 @@ function runAndRenderManual(bestExcessInfo) {
   renderCoverage();
   renderCurve(rows);
   renderLedger(rows);
-  renderStability(p, start, end, result);
   return { rows, summary };
 }
 
 document.getElementById('run-btn').addEventListener('click', () => runAndRenderManual());
 
-// ============================================================================
-// 參數搜尋 — 選參流程(訓練→驗證→驗證→測試 / 粗搜→細調)直接對照同事optimizer.js跟
-// explorer.js逐項複製，同事的小主管已經審過這套流程。但每個門檻原本鎖死在他審過的固定
-// 離散選項(例如分析師門檻只試1或3兩點)——這不是流程本身，是候選值範圍design choice，
-// 2026-07-28改成寬範圍隨機取樣：分析師數某天可能15個、隔天可能3個，門檻只卡在1或3
-// 兩個點等於根本沒認真掃過這個維度。範圍依實際資料分佈訂(調升幅度99分位數約36.4%、
-// 分析師數99分位數約24位)，用固定種子的PRNG取樣，同一組base參數重跑候選不會跳動。
-// ============================================================================
-function mulberry32(seed) {
-  return function () {
-    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+// 日期快捷鍵：不用每次都點日曆挑日期，常用區間(全部/訓練/驗證/測試/近1年)一鍵套用並直接重跑。
+document.getElementById('date-presets').addEventListener('click', (evt) => {
+  const btn = evt.target.closest('button[data-preset]');
+  if (!btn) return;
+  const lastDate = DATES.length ? DATES[DATES.length - 1] : new Date().toISOString().slice(0, 10);
+  const ranges = {
+    all: ['2023-01-01', lastDate],
+    train: ['2023-01-01', '2024-12-31'],
+    valid: ['2025-01-01', '2025-12-31'],
+    test: ['2026-01-01', lastDate],
+    '1y': [new Date(new Date(lastDate).getTime() - 365 * 86400000).toISOString().slice(0, 10), lastDate],
   };
-}
-function randRange(rng, lo, hi) { return lo + rng() * (hi - lo); }
-function randInt(rng, lo, hi) { return Math.floor(randRange(rng, lo, hi + 1)); }
-function randChoice(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
+  const [s, e] = ranges[btn.dataset.preset];
+  document.getElementById('p-start').value = s;
+  document.getElementById('p-end').value = e;
+  document.querySelectorAll('#date-presets button').forEach(b => b.classList.toggle('active', b === btn));
+  runAndRenderManual();
+});
+
+// ============================================================================
+// 參數搜尋 — 選參流程(訓練→驗證→驗證→測試 / 粗搜→細調)+候選產生方式，全部逐項對照
+// 同事optimizer.js跟explorer.js複製，包含候選值本身也用他審過的固定離散網格，不再用
+// 隨機取樣(2026-07-28最終定案：曾經改成寬範圍隨機取樣，但發現這樣統計上難以取樣到他
+// 刻意選定的角落、也可能取到不合理的極端參數，改回跟他完全一致的固定網格)。
+// ============================================================================
 
 // --- 共用：把summary換算成單一排序分數，超額報酬為主，Sharpe/回撤做微幅風險調整 ---
 // optimizer.js版本係數(0.03/0.10)：rankValue=excess+clip(sharpe,-3,3)*0.03+maxDD*0.10
@@ -1776,6 +1700,13 @@ function buildOptimizerCandidates(baseParams) {
 }
 
 async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
+  // 2026-07-28：曾經嘗試用buildFoldEvUp()複製同事140天歷史緩衝的截斷行為(每段訓練/驗證/
+  // 測試期只看得到段落起始日往前140天內能解析出執行日的訊號)，根因確實查證過、可精確重現
+  // (直接用他backtest.js算出跟他伺服器一致的數字)。但實際接上優化器整體流程後，驗證期落差
+  // 反而從1.59pp惡化到6.72pp——代表這個機制還有其他沒抓到的交互影響(可能是分數變動導致
+  // 候選排名/入選名單跟著變，不是單一訊號分數對不對的問題)，貿然上線風險大於現有已知的
+  // 小落差，已回退保留全域EV_UP，不個別套用fold截斷。候選網格(buildOptimizerCandidates)
+  // 本身已經跟同事optimizer.js完全一致，這是這次驗證信心最高、風險最低的部分。
   const candidates = buildOptimizerCandidates(baseParams);
   const fold1 = [];
   for (let i = 0; i < candidates.length; i++) {
@@ -1891,42 +1822,43 @@ async function runStrictSearchAndRender() {
 document.getElementById('strict-search-btn').addEventListener('click', () => { runStrictSearchAndRender(); });
 
 // ----------------------------------------------------------------------------
-// In-Sample Exploration：選參流程對照explorer.js的exploreExecution()(粗搜→取前8名→細調)，
-// 候選產生方式一樣改成寬範圍隨機取樣。144組粗搜(配置法在[原始綜合分數,Enhanced]隨機選×
-// 最大持股∈[3,20]×單檔上限∈[10%,50%]×持有天數∈[5,60]日×達標出場隨機開關，固定調降出場=是、
-// 調升≥3%、分析師≥1、上漲空間≥0%)，直接用2023至今全期績效排名，取前8名；每個再細調24組
-// 門檻(調升幅度∈[0,15]%×分析師∈[0,25]位×上漲空間∈[0,20]%×調降出場隨機開關)。全部候選
-// (含重複快取去重)一起排名，取分數最高者。
+// In-Sample Exploration：選參流程+候選產生方式完全對照同事explorer.js的exploreExecution()
+// (粗搜→取前8名→細調)——固定離散網格，不是隨機取樣：
+// 144組粗搜：配置法∈[原始綜合分數,Enhanced]×最大持股∈[3,5,10,20]×單檔上限∈[20%,30%,50%]×
+// 持有天數∈[10,20,40]日×達標出場∈[是,否]，固定調降出場=是、調升≥3%、分析師≥1、上漲空間≥0%。
+// 直接用2023至今全期績效排名，取前8名；每個再細調24組(3×2×2×2)：調升幅度∈[0,3%,6%]×
+// 分析師∈[1,3]位×上漲空間∈[0,5%]×調降出場∈[是,否]。全部候選(含重複快取去重)一起排名，
+// 取分數最高者。這個功能全程用2023-01-01當起始日(對照explorer.js的period寫死不分段)，
+// 不受140天分段緩衝限制影響，不用像優化器那樣另外處理buildFoldEvUp。
 // ----------------------------------------------------------------------------
-const EXPLORE_BASE_N = 144;
-const EXPLORE_REFINE_N = 24;
-const EXPLORE_SEED = 43;
-
 function candidateKey(p) {
   return [p.sizingMode, p.maxPositions, p.maxWeightPerStock, p.maxHoldDays, p.exitOnTarget, p.exitOnDown, p.minUpgradePct, p.minAnalystCount, p.minUpside].join('|');
 }
 function buildExploreBaseCandidates(baseParams) {
-  const rng = mulberry32(EXPLORE_SEED);
   const rows = [];
-  for (let i = 0; i < EXPLORE_BASE_N; i++) {
-    const sizingMode = randChoice(rng, ['composite', 'enhanced']);
-    const maxPositions = randInt(rng, 3, 20);
-    const maxWeightPerStock = Number(randRange(rng, 0.10, 0.50).toFixed(3));
-    const maxHoldDays = randInt(rng, 5, 60);
-    const exitOnTarget = rng() > 0.5;
-    rows.push({ ...baseParams, sizingMode, maxPositions, maxWeightPerStock, maxHoldDays, exitOnTarget, exitOnDown: true, minUpgradePct: 3, minAnalystCount: 1, minUpside: 0, avgRule: 'none' });
+  for (const sizingMode of ['composite', 'enhanced']) {
+    for (const maxPositions of [3, 5, 10, 20]) {
+      for (const maxWeightPerStock of [0.2, 0.3, 0.5]) {
+        for (const maxHoldDays of [10, 20, 40]) {
+          for (const exitOnTarget of [true, false]) {
+            rows.push({ ...baseParams, sizingMode, maxPositions, maxWeightPerStock, maxHoldDays, exitOnTarget, exitOnDown: true, minUpgradePct: 3, minAnalystCount: 1, minUpside: 0, avgRule: 'none' });
+          }
+        }
+      }
+    }
   }
   return rows;
 }
-function refineExploreCandidates(base, seedOffset) {
-  const rng = mulberry32(EXPLORE_SEED * 1000 + seedOffset);
+function refineExploreCandidates(base) {
   const rows = [];
-  for (let i = 0; i < EXPLORE_REFINE_N; i++) {
-    const minUpgradePct = Number(randRange(rng, 0, 15).toFixed(2));
-    const minAnalystCount = randInt(rng, 0, 25);
-    const minUpside = Number(randRange(rng, 0, 0.20).toFixed(4));
-    const exitOnDown = rng() > 0.5;
-    rows.push({ ...base, minUpgradePct, minAnalystCount, minUpside, exitOnDown });
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const exitOnDown of [true, false]) {
+          rows.push({ ...base, minUpgradePct, minAnalystCount, minUpside, exitOnDown });
+        }
+      }
+    }
   }
   return rows;
 }
@@ -1954,7 +1886,7 @@ async function runInSampleExplorationAsync(baseParams, endDate, onProgress) {
   baseResults.sort((a, b) => b.value - a.value);
   const seeds = baseResults.slice(0, 8);
   for (let s = 0; s < seeds.length; s++) {
-    for (const p of refineExploreCandidates(seeds[s].params, s)) {
+    for (const p of refineExploreCandidates(seeds[s].params)) {
       run(p);
       done++;
       if (done % 8 === 0 && onProgress) { onProgress(done, total, '細調(前8名各24組門檻)'); await new Promise(r => setTimeout(r, 0)); }
