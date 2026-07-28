@@ -924,16 +924,19 @@ function runBacktest(p, startDate, endDate) {
     const prevDay = i > startIdx ? DATES[i - 1] : null;
 
     // --- 隔夜段報酬：用「今天開盤前實際持有」的部位、當時(昨天收盤後)的權重，
-    // 算「昨收→今開」這段報酬。這段要在出場/重新配置動作之前算。---
+    // 算「昨收→今開」這段報酬。這段要在出場/重新配置動作之前算。同事backtest.js的
+    // positionReturns也是把OVERNIGHT/INTRADAY分兩筆記錄，這裡的overnightAttribution
+    // 補上同樣的個股層級明細，不是只算進當日總報酬。---
     let overnightRet = 0;
+    const overnightAttribution = [];
     if (prevDay != null) {
       for (const [t, w] of weightNow) {
         const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
         const openNow = openArr ? openArr[i] : null;
         const priorClose = priceArr ? priceArr[i - 1] : null;
-        if (openNow != null && priorClose != null && priorClose !== 0) {
-          overnightRet += w * (openNow / priorClose - 1);
-        }
+        const r = (openNow != null && priorClose != null && priorClose !== 0) ? (openNow / priorClose - 1) : null;
+        if (r != null) overnightRet += w * r;
+        overnightAttribution.push({ ticker: t, weight: w, priceStart: priorClose, priceEnd: openNow, ret: r, contribution: r != null ? w * r : null });
       }
     }
 
@@ -1049,7 +1052,7 @@ function runBacktest(p, startDate, endDate) {
     rows.push({
       idx: i, date: day,
       holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
-      attribution,
+      attribution, overnightAttribution,
       nPositions: weightNow.size,
       dailyReturn: dailyRet, taiexReturn: taiexRet,
       buys: buysToday, sells: sellsToday,
@@ -1407,7 +1410,20 @@ function renderLedgerDetail() {
     }),
   ].join('') || '<tr><td colspan="5" style="color:var(--ink-faint);">今日無買賣</td></tr>';
 
-  const attributionRows = r.attribution.slice().sort((a, b) => (b.contribution || 0) - (a.contribution || 0)).map(a => `
+  // 2026-07-28新增：對照同事backtest.js的positionReturns，把隔夜段(前收→開盤，用重新
+  // 配置前的舊權重)也拆到個股層級一起顯示，不再只有盤中段——這樣表格裡每一列的貢獻
+  // 加總才會等於當日總報酬，不是只等於盤中段。
+  const overnightRows = (r.overnightAttribution || []).map(a => `
+    <tr>
+      <td><b>${a.ticker}</b></td>
+      <td style="color:var(--ink-faint);">前收至開盤(隔夜段)</td>
+      <td class="mono">${fmtPct(a.weight * 100)}</td>
+      <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
+      <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
+      <td class="mono ${a.ret != null && a.ret >= 0 ? 'up' : 'down'}" style="color:${a.ret != null ? (a.ret >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${a.ret != null ? fmtPct(a.ret * 100) : '—'}</td>
+      <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
+    </tr>`);
+  const intradayRows = r.attribution.map(a => `
     <tr>
       <td><b>${a.ticker}</b></td>
       <td style="color:var(--ink-faint);">開盤至收盤(盤中段)${a.isEntryDay ? '·進場日' : ''}</td>
@@ -1416,7 +1432,8 @@ function renderLedgerDetail() {
       <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
       <td class="mono ${a.ret != null && a.ret >= 0 ? 'up' : 'down'}" style="color:${a.ret != null ? (a.ret >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${a.ret != null ? fmtPct(a.ret * 100) : '—'}</td>
       <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
+    </tr>`);
+  const attributionRows = [...overnightRows, ...intradayRows].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
 
   const totalExposure = r.holdings.reduce((s, h) => s + h.weight, 0) * 100;
   const flowLabel = r.dailyReturn >= 0 ? '提領' : '補入';
@@ -1462,7 +1479,7 @@ function renderLedgerDetail() {
 
     <div class="eyebrow-row" style="margin-top:4px;"><span class="eyebrow">Position Return Attribution</span></div>
     <div class="block-title" style="margin-left:0; font-size:15px;">個股當日報酬明細</div>
-    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股盤中段報酬(開盤至收盤)；各列貢獻加總等於當日「盤中段」總報酬，不含隔夜段(前一天收盤到當天開盤，用重新配置前的舊權重)。</p>
+    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股區間報酬，隔夜段(前收→開盤，用重新配置前的舊權重)跟盤中段(開盤→收盤，用重新配置後的新權重)分開列出；兩段全部列的貢獻加總，等於當日總報酬。</p>
     <div class="table-wrap" style="margin-bottom:18px;">
       <table class="book-table">
         <thead><tr><th>股票</th><th>持有區間</th><th>計算權重</th><th>起始價</th><th>結束價</th><th>個股報酬</th><th>策略貢獻</th></tr></thead>
