@@ -36,12 +36,24 @@ TZ_TW = timezone(timedelta(hours=8))
 
 
 def get_tracked_tickers():
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/factset_revisions",
-        headers=HEADERS, params={"select": "ticker"}, timeout=60,
-    )
-    r.raise_for_status()
-    tickers = sorted({row["ticker"] for row in r.json() if row.get("ticker")})
+    # 2026-07-28修正：原本沒分頁，Supabase REST API預設一次最多回傳1000筆，但
+    # factset_revisions有9000多筆，只查得到前1000筆、算出的distinct ticker因此少了10檔——
+    # 凡是「第一次出現的新聞」剛好落在第1000筆之後的股票，永遠不會被列入追蹤清單，股價
+    # 也就永遠抓不到(查證發現的12檔股價全空，其中10檔根因就在這裡，不是yfinance代碼問題)。
+    # 改成分頁抓全部。
+    all_rows, offset, page_size = [], 0, 5000
+    while True:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/factset_revisions",
+            headers=HEADERS, params={"select": "ticker", "offset": str(offset), "limit": str(page_size)}, timeout=60,
+        )
+        r.raise_for_status()
+        page = r.json()
+        if not page:
+            break
+        all_rows.extend(page)
+        offset += page_size
+    tickers = sorted({row["ticker"] for row in all_rows if row.get("ticker")})
     print(f"追蹤股票數(來自factset_revisions distinct ticker): {len(tickers)}")
     return tickers
 
@@ -84,38 +96,50 @@ def main():
     failed = []
     for i, t in enumerate(tickers, 1):
         mt = market_map.get(t)
-        suffixes = [".TW"] if mt == "上市" else [".TWO"] if mt == "上櫃" else [".TW", ".TWO"]
+        # 2026-07-28修正：原本market_type=上市/上櫃時只試「對應的那一個」代碼，市場別記錄
+        # 一旦過期或漏登，就永久抓不到那檔股票，資料庫會整批缺該股票的股價(查證發現12檔
+        # 股票發生這個狀況：新聞事件有抓到、股價卻完全沒有)。改成「有記錄market_type時優先
+        # 試對應代碼，但失敗一律再試另一個代碼」，不管市場別記錄準不準，都還有機會抓到。
+        suffixes = [".TW", ".TWO"] if mt == "上市" else [".TWO", ".TW"] if mt == "上櫃" else [".TW", ".TWO"]
         ok = False
         for suf in suffixes:
-            try:
-                df = yf.download(f"{t}{suf}", start=start_date, end=end_date, progress=False, auto_adjust=False)
-                if df.empty:
+            # 2026-07-28新增：yfinance偶爾因為短暫網路/流量限制單次抓取失敗(不是真的沒資料)，
+            # 原本失敗一次就直接放棄換下一個代碼，這裡加2次重試(短暫等待後重來)，避免把
+            # 「暫時抓不到」誤判成「這檔股票沒資料」而永久漏掉。
+            merged = None
+            for attempt in range(3):
+                try:
+                    df = yf.download(f"{t}{suf}", start=start_date, end=end_date, progress=False, auto_adjust=False)
+                    if df.empty:
+                        break
+                    close, open_ = df["Close"], df["Open"]
+                    if hasattr(close, "columns"):
+                        close = close.iloc[:, 0]
+                    if hasattr(open_, "columns"):
+                        open_ = open_.iloc[:, 0]
+                    # 2026-07-28修正：原本用dropna(how="all")，只要open/close其中一個有值就會寫進資料庫，
+                    # 等於允許close=null的殘缺列被upsert進stock_prices/taiex_index——這種列一旦進了
+                    # taiex_index，因為taiex_index本身就是回測引擎拿來當交易日曆基準的表，就會讓那個
+                    # 交易日「看起來存在」但close是null，我們自己的引擎有fillna(0)防呆所以沒事，但
+                    # 同事的引擎沒防呆，close/前收-1直接把null當0算，炸出離譜的單日-100%。改成
+                    # dropna(how="any")，open/close只要缺一個就整列不寫，寧可那天暫時沒資料(等下次
+                    # 排程重跑再補)，也不要寫一筆看似存在、實際上殘缺的資料進資料庫。
+                    merged = close.to_frame("close").join(open_.to_frame("open")).dropna(how="any")
+                    break
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(1.0)
                     continue
-                close, open_ = df["Close"], df["Open"]
-                if hasattr(close, "columns"):
-                    close = close.iloc[:, 0]
-                if hasattr(open_, "columns"):
-                    open_ = open_.iloc[:, 0]
-                # 2026-07-28修正：原本用dropna(how="all")，只要open/close其中一個有值就會寫進資料庫，
-                # 等於允許close=null的殘缺列被upsert進stock_prices/taiex_index——這種列一旦進了
-                # taiex_index，因為taiex_index本身就是回測引擎拿來當交易日曆基準的表，就會讓那個
-                # 交易日「看起來存在」但close是null，我們自己的引擎有fillna(0)防呆所以沒事，但
-                # 同事的引擎沒防呆，close/前收-1直接把null當0算，炸出離譜的單日-100%。改成
-                # dropna(how="any")，open/close只要缺一個就整列不寫，寧可那天暫時沒資料(等下次
-                # 排程重跑再補)，也不要寫一筆看似存在、實際上殘缺的資料進資料庫。
-                merged = close.to_frame("close").join(open_.to_frame("open")).dropna(how="any")
-                if len(merged) == 0:
-                    continue
-                for d, row in merged.iterrows():
-                    price_rows.append({
-                        "ticker": t, "date": d.strftime("%Y-%m-%d"),
-                        "close": float(row["close"]),
-                        "open": float(row["open"]),
-                    })
-                ok = True
-                break
-            except Exception:
+            if merged is None or len(merged) == 0:
                 continue
+            for d, row in merged.iterrows():
+                price_rows.append({
+                    "ticker": t, "date": d.strftime("%Y-%m-%d"),
+                    "close": float(row["close"]),
+                    "open": float(row["open"]),
+                })
+            ok = True
+            break
         if not ok:
             failed.append(t)
         if i % 50 == 0:
