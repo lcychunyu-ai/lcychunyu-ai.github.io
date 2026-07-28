@@ -75,6 +75,40 @@ def _fetch_all_events():
     return out
 
 
+def _fetch_raw_stock_prices(table: str = "stock_prices"):
+    """2026-07-28新增：直接查stock_prices原始表，不透過get_strategy_price_bundle()這種
+    「先跟大盤交易日曆對齊、對不上的日期直接丟掉」的RPC。個股偶爾會有大盤加權指數當天
+    沒有報價、但個股自己有報價的日子(例如某檔股票剛好在這天有資料、大盤那天缺值)，
+    這種日子如果透過對齊過的bundle資料，會被整筆丟掉，動能/波動率的回看窗口因此少算
+    一天，跟同事backtest.js的makeEvents()「每檔股票各自獨立掃自己的價格紀錄，不受大盤
+    日曆限制」對不起來。這裡回傳的是「每檔股票自己的、依日期排序、沒有NaN空缺」的
+    原始序列，只給動能/波動率這類回看窗口計算用，不影響逐日模擬本身(逐日模擬本來就該
+    用大盤交易日曆，這是正確的、不需要改)。
+    """
+    out, offset, page_size = [], 0, 10000
+    while True:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/{table}", headers=SB_HEADERS,
+            params={"select": "ticker,date,close", "order": "ticker.asc,date.asc",
+                    "offset": str(offset), "limit": str(page_size)},
+            timeout=60,
+        )
+        r.raise_for_status()
+        page = r.json()
+        if not page:
+            break
+        out.extend(page)
+        offset += page_size
+    df = pd.DataFrame(out)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["close"])
+    raw = {}
+    for t, g in df.groupby("ticker"):
+        g = g.sort_values("date")
+        raw[t] = pd.Series(g["close"].values, index=pd.DatetimeIndex(g["date"]))
+    return raw
+
+
 def load_data():
     r = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle", headers=SB_HEADERS, json={}, timeout=60)
     r.raise_for_status()
@@ -92,9 +126,11 @@ def load_data():
     for t, arr in bundle["tickers_open"].items():
         stock_price_open[t] = pd.Series(arr, index=calendar, dtype=float)
 
+    stock_price_raw = _fetch_raw_stock_prices("stock_prices")
+
     events = pd.DataFrame(events_raw)
     events["date"] = pd.to_datetime(events["date"])
-    return stock_price, stock_price_open, taiex, taiex_open, calendar, events
+    return stock_price, stock_price_open, taiex, taiex_open, calendar, events, stock_price_raw
 
 
 def next_trading_day(d: pd.Timestamp, calendar: pd.DatetimeIndex) -> Optional[pd.Timestamp]:
@@ -139,7 +175,7 @@ def _dedupe_by_execution_window(events: pd.DataFrame, calendar: pd.DatetimeIndex
 # 2. 事件表前處理：算出兩種上漲空間、歷史平均(給avg_rule跟異常調升因子用)
 # ----------------------------------------------------------------------------
 
-def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex, taiex: Optional[pd.Series] = None) -> pd.DataFrame:
+def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex, taiex: Optional[pd.Series] = None, stock_price_raw: Optional[dict] = None) -> pd.DataFrame:
     # 先跨UP/DOWN方向去重(同一檔股票同一個執行窗口只留發布時間最晚的那篇)，避免明明應該
     # 被較晚的DOWN蓋掉的UP訊號，因為UP/DOWN分開處理而漏網、還是被當成候選進場。
     deduped = _dedupe_by_execution_window(events, calendar)
@@ -183,12 +219,12 @@ def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: di
     ev["streak"] = grp.cumcount()  # 這是第幾次調升(從0開始)，越大代表過去連續調升次數越多
 
     if taiex is not None:
-        ev = _attach_enhanced_factors(ev, events, stock_price, calendar, taiex)
+        ev = _attach_enhanced_factors(ev, events, stock_price, calendar, taiex, stock_price_raw)
 
     return ev
 
 
-def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_price: dict, calendar: pd.DatetimeIndex, taiex: pd.Series) -> pd.DataFrame:
+def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_price: dict, calendar: pd.DatetimeIndex, taiex: pd.Series, stock_price_raw: Optional[dict] = None) -> pd.DataFrame:
     """直接對照同事backtest.js的makeEvents()，算出enhanced配置公式要用的輔助欄位：
     abnormal_revision(異常調升，相對該股過去365天|調升幅度|中位數)、
     recent_upgrades_60(過去60天內調升次數+1)、momentum_20/relative_momentum_20(進場前
@@ -246,9 +282,22 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
         mom = rel_mom = 0.0
         vol = 0.35
         if execute_date is not None and execute_date in calendar:
+            # 2026-07-28修正：對照同事backtest.js的priorSeries()——動能/波動率的回看窗口是
+            # 「這檔股票自己的價格紀錄裡，執行日之前最近21個有效收盤價」，不受大盤交易日曆
+            # 限制。個股偶爾會有大盤加權指數當天沒有報價、但個股自己有報價的日子，這種日子
+            # 如果用「對齊大盤日曆的序列」去切窗口，會被整筆跳過，回看窗口因此少算一天、
+            # 往前多推一天，動能/波動率算出來就會跟同事版本對不上。改成優先用stock_price_raw
+            # (每檔股票自己排序、沒有NaN空缺的原始序列)做日期比對，沒有raw資料才退回用
+            # 對齊過的calendar序列(兼容舊呼叫方式)。
+            raw_ser = stock_price_raw.get(ticker) if stock_price_raw else None
+            if raw_ser is not None and len(raw_ser) > 0:
+                cut = raw_ser.index.searchsorted(execute_date, side="left")
+                window = raw_ser.iloc[max(0, cut - 21):cut]
+            else:
+                ser = stock_price.get(ticker)
+                pos = calendar.get_loc(execute_date)
+                window = ser.iloc[max(0, pos - 21):pos].dropna() if ser is not None else pd.Series(dtype=float)
             pos = calendar.get_loc(execute_date)
-            ser = stock_price.get(ticker)
-            window = ser.iloc[max(0, pos - 21):pos].dropna() if ser is not None else pd.Series(dtype=float)
             bench_window = taiex.iloc[max(0, pos - 21):pos]
             if len(window) > 1:
                 mom = window.iloc[-1] / window.iloc[0] - 1
@@ -693,8 +742,8 @@ def summarize(book: pd.DataFrame, trades: pd.DataFrame, orders: Optional[pd.Data
 # ----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    stock_price, stock_price_open, taiex, taiex_open, calendar, events = load_data()
-    ev = prepare_events(events, stock_price, stock_price_open, calendar, taiex=taiex)
+    stock_price, stock_price_open, taiex, taiex_open, calendar, events, stock_price_raw = load_data()
+    ev = prepare_events(events, stock_price, stock_price_open, calendar, taiex=taiex, stock_price_raw=stock_price_raw)
     down_lookup = down_tickers_on_factory(events, calendar)
 
     print(f"UP事件(訊號)總數: {len(ev)}")
