@@ -510,6 +510,24 @@ function resolveExecutionIdx(dateStr, timeStr) {
   return nextTradingDayIdx(dateStr);
 }
 
+// 2026-07-28新增：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行時間
+// 窗口，不管UP還是DOWN，只留發布時間最晚的那篇。原本UP/DOWN是兩條獨立處理的資料流
+// (UP進prepareEvents決定進場候選、DOWN進buildDownByDate決定出場)，完全沒有互相去重——
+// 如果同一檔股票同一個執行窗口裡「先有一篇UP、後有一篇DOWN」，同事的引擎會讓時間較晚的
+// DOWN直接蓋掉UP(UP從未成為候選)，我們原本兩條資料流互不知情，UP還是會被當成候選處理，
+// 導致明明應該被蓋掉的進場訊號還是進了場。這裡在UP/DOWN分流之前，先合併去重一次。
+function dedupeByExecutionWindow(events) {
+  const withIdx = events.map(e => ({ ...e, _execIdx: resolveExecutionIdx(e.date, e.news_time_taipei) })).filter(e => e._execIdx != null);
+  const sorted = withIdx.slice().sort((a, b) => {
+    const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
+    const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
+    return ta.localeCompare(tb);
+  });
+  const latestByWindow = new Map();
+  for (const e of sorted) latestByWindow.set(`${e.ticker}|${e._execIdx}`, e);
+  return [...latestByWindow.values()];
+}
+
 // 異常調升/連續調升次數：對照同事backtest.js的makeEvents()，用「全部方向」(UP+DOWN)
 // 的歷史事件依發布時間排序算基準值——abnormalRevision(相對該股過去365天|調升幅度|
 // 中位數)、recentUpgrades60(過去60天內調升次數+1)。回傳Map，key='ticker|date'。
@@ -563,11 +581,11 @@ function computeRevisionHistory(events) {
 // 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
 function prepareEvents(events) {
   const revisionHistory = computeRevisionHistory(events);
-  // 2026-07-28修正：排序原本只用ticker+date，同一天同一股票如果有兩篇以上獨立新聞(真實
-  // 存在，例如2317在2024-03-15當天就有兩篇分析師數不同的報導)，後面「同entryIdx keep last」
-  // 去重挑到哪一筆會是undefined behavior。加入news_time_taipei當第三層鍵，才會穩定挑到
-  // 當天發布時間最晚的那篇，跟同事backtest.js的latestByWindow語意一致。
-  const up = events.filter(e => e.direction === 'UP')
+  // 先跨UP/DOWN方向去重(同一檔股票同一個執行窗口只留發布時間最晚的那篇)，避免明明應該
+  // 被較晚的DOWN蓋掉的UP訊號，因為UP/DOWN分開處理而漏網、還是被當成候選進場。加入
+  // news_time_taipei當第三層排序鍵，"keep last"才會穩定挑到當天發布時間最晚的那篇。
+  const deduped = dedupeByExecutionWindow(events);
+  const up = deduped.filter(e => e.direction === 'UP')
     .slice()
     .sort((a, b) => {
       if (a.ticker !== b.ticker) return a.ticker.localeCompare(b.ticker);
@@ -635,8 +653,11 @@ function prepareEvents(events) {
 }
 
 function buildDownByDate(events) {
+  // 跟進場邏輯用同一份跨UP/DOWN方向去重過的事件流，才會跟prepareEvents對同一個
+  // (ticker,執行窗口)判斷出同樣的贏家，不會兩邊各自漏判。
+  const deduped = dedupeByExecutionWindow(events);
   const map = new Map();
-  events.filter(e => e.direction === 'DOWN').forEach(e => {
+  deduped.filter(e => e.direction === 'DOWN').forEach(e => {
     const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
     if (idx == null) return;
     if (!map.has(idx)) map.set(idx, new Set());

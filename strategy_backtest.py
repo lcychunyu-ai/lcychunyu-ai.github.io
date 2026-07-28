@@ -114,17 +114,36 @@ def resolve_execution_date(d: pd.Timestamp, time_taipei, calendar: pd.DatetimeIn
     return next_trading_day(d, calendar)
 
 
+def _dedupe_by_execution_window(events: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.DataFrame:
+    """2026-07-28新增：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行
+    時間窗口，不管UP還是DOWN，只留發布時間最晚的那篇。原本UP/DOWN是兩條獨立處理的
+    資料流(UP進prepare_events決定進場候選、DOWN進down_tickers_on_factory決定出場)，
+    完全沒有互相去重——如果同一檔股票同一個執行窗口裡「先有一篇UP、後有一篇DOWN」，
+    同事的引擎會讓時間較晚的DOWN直接蓋掉UP(UP從未成為候選)，我們原本兩條資料流互不
+    知情，UP還是會被當成候選處理，導致明明應該被蓋掉的進場訊號還是進了場。這裡在UP/DOWN
+    分流之前，先合併去重一次，兩邊都用這份「跨方向去重後」的乾淨事件流。"""
+    all_ev = events.copy()
+    all_ev["execute_date"] = all_ev.apply(
+        lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1
+    )
+    all_ev = all_ev.dropna(subset=["execute_date"])
+    all_ev["publish_ts"] = pd.to_datetime(
+        all_ev["date"].dt.strftime("%Y-%m-%d") + " " + all_ev["news_time_taipei"].fillna("00:00:00")
+    )
+    all_ev = all_ev.sort_values("publish_ts")
+    all_ev = all_ev[~all_ev.duplicated(subset=["ticker", "execute_date"], keep="last")]
+    return all_ev.drop(columns=["execute_date", "publish_ts"]).sort_values(["ticker", "date"]).reset_index(drop=True)
+
+
 # ----------------------------------------------------------------------------
 # 2. 事件表前處理：算出兩種上漲空間、歷史平均(給avg_rule跟異常調升因子用)
 # ----------------------------------------------------------------------------
 
 def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex, taiex: Optional[pd.Series] = None) -> pd.DataFrame:
-    ev = events[events["direction"] == "UP"].copy()
-    # 2026-07-28修正：排序原本只用["ticker","date"]，同一天同一股票如果有兩篇以上獨立新聞
-    # (真實存在，例如2317在2024-03-15當天就有兩篇分析師數不同的報導)，"keep='last'"去重
-    # 挑到哪一筆會是undefined behavior(取決於資料庫回傳的任意順序)。改成排序時加入
-    # news_time_taipei當第三層鍵，"keep='last'"才會穩定挑到當天發布時間最晚的那篇，
-    # 跟同事backtest.js的latestByWindow(發布時間最晚者留下)語意一致。
+    # 先跨UP/DOWN方向去重(同一檔股票同一個執行窗口只留發布時間最晚的那篇)，避免明明應該
+    # 被較晚的DOWN蓋掉的UP訊號，因為UP/DOWN分開處理而漏網、還是被當成候選進場。
+    deduped = _dedupe_by_execution_window(events, calendar)
+    ev = deduped[deduped["direction"] == "UP"].copy()
     ev = ev.sort_values(["ticker", "date", "news_time_taipei"]).reset_index(drop=True)
 
     # 執行日依09:00開盤時間窗口規則決定，不再固定用下一交易日。
@@ -574,8 +593,12 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
 
 
 def down_tickers_on_factory(ev_full: pd.DataFrame, calendar: pd.DatetimeIndex):
-    """跟進場邏輯用同一套09:00執行時間窗口規則，生效日才會跟entry_date口徑一致。"""
-    down = ev_full[ev_full["direction"] == "DOWN"].copy()
+    """跟進場邏輯用同一套09:00執行時間窗口規則，生效日才會跟entry_date口徑一致；也要用
+    同一份跨UP/DOWN方向去重過的事件流(_dedupe_by_execution_window)，才會跟prepare_events
+    對同一個(ticker,執行窗口)判斷出同樣的贏家——避免這裡看到的DOWN，跟entries那邊看到的
+    UP，其實是同一個窗口裡「應該只留一篇」但兩邊各自漏判的情況。"""
+    deduped = _dedupe_by_execution_window(ev_full, calendar)
+    down = deduped[deduped["direction"] == "DOWN"].copy()
     down["effective_date"] = down.apply(lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1)
     down = down.dropna(subset=["effective_date"])
     by_date = down.groupby("effective_date")["ticker"].apply(set).to_dict()
