@@ -1447,19 +1447,31 @@ function renderLedgerDetail() {
 }
 
 function exportCsv() {
+  // 2026-07-28修正：對照同事public/strategy.js的exportDaily()，他的CSV有exposure(曝險)、
+  // cashWeight(閒置現金%)、settlementFlow(平帳資金流)、benchmarkPriceCumulative(加權指數
+  // 點位漲幅，複利式，不同於我們一直用的算術每日相加)這四欄，我們原本沒匯出——這些數值
+  // 我們自己內部其實都已經算得出來，只是沒放進CSV，這裡補上，同時保留我們原本多出來的
+  // 超額報酬跟持股清單明細欄位。
   const rows = CURRENT_ROWS;
   if (!rows.length) return;
-  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '超額報酬', '持股數', '持股清單(ticker:weight%)'];
+  const taiexBase = TAIEX[rows[0].idx];
+  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '大盤指數點位累積漲幅', '超額報酬', '曝險', '閒置現金比例', '平帳資金流', '持股數', '持股清單(ticker:weight%)'];
   const lines = [header.join(',')];
   rows.forEach(r => {
     const holdingsStr = r.holdings.map(h => `${h.ticker}:${(h.weight * 100).toFixed(2)}`).join(';');
+    const exposure = r.holdings.reduce((s, h) => s + h.weight, 0);
+    const benchmarkPriceCumulative = (taiexBase != null && TAIEX[r.idx] != null) ? (TAIEX[r.idx] / taiexBase - 1) : null;
     lines.push([
       r.date,
       (r.dailyReturn * 100).toFixed(4),
       (r.taiexReturn * 100).toFixed(4),
       (r.cumReturn * 100).toFixed(4),
       (r.cumTaiex * 100).toFixed(4),
+      benchmarkPriceCumulative != null ? (benchmarkPriceCumulative * 100).toFixed(4) : '',
       (r.excess * 100).toFixed(4),
+      (exposure * 100).toFixed(4),
+      ((1 - exposure) * 100).toFixed(4),
+      (-r.dailyReturn * 100).toFixed(4),
       r.nPositions,
       `"${holdingsStr}"`,
     ].join(','));
