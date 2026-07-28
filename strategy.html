@@ -1010,6 +1010,27 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       }
     }
 
+    // --- 隔夜段結束、出場/重新配置動作之前：先算「自然漂移後」的權重——不重新配置的話，
+    // 權重會因為股價漲跌從最後一次配置的目標值移動，公式跟同事backtest.js的
+    // positionReturns一樣：weight_t = weight_{t-1} * (1+個股報酬)。注意這裡「不」除以
+    // 整體報酬做重新正規化——同事的權重是「相對固定名目本金」的算術權重，不是每天都
+    // 强制加總回1的複利權重，這也是為什麼他的exposure/cashWeight每天會偏離1(用
+    // DAILY_PROFIT_WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回現金，不是隱性重新分配到
+    // 還持有的部位上)。這個漂移後的權重才是「今天開盤當下實際持有」的權重，出場/重新
+    // 配置的weightBefore要用這個，不能繼續用「昨天配置完就再也不變」的舊weightNow——
+    // 不然SIGNAL_REBALANCE的weightBefore/weightAfter永遠一樣，跟同事真實交易紀錄
+    // (weightBefore是漂移後的非整數值)對不起來，這就是主管要求的「每天不管有沒有訊號
+    // 都轉回目標權重」的前提。
+    const driftedAtOpen = new Map();
+    for (const [t, w] of weightNow) {
+      const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
+      const openNow = openArr ? openArr[i] : null;
+      const priorClose = priceArr ? priceArr[i - 1] : null;
+      const r = (openNow != null && priorClose != null && priorClose !== 0) ? (openNow / priorClose - 1) : null;
+      const drifted = r != null ? w * (1 + r) : w;
+      driftedAtOpen.set(t, drifted);
+    }
+
     // --- 真出場檢查(對active資格池，不是只看今天有沒有權重)：達目標價用「前一天收盤價」
     // 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；持有天數用
     // 交易日數，從active設定的entryIdx算起。---
@@ -1029,7 +1050,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       active.delete(t);
       const openArr = PRICES_OPEN[t];
       const exitPrice = openArr ? openArr[i] : null;
-      const oldW = weightNow.get(t) || 0;
+      const oldW = driftedAtOpen.get(t) || 0;
       weightNow.delete(t);
       if (tradeEntry.has(t)) {
         const te = tradeEntry.get(t);
@@ -1085,7 +1106,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       const newWeights = allocateWeights(combined, p);
       for (const [t, a] of active) {
         const w = newWeights.get(t) || 0;
-        const oldW = weightNow.get(t) || 0;
+        const oldW = driftedAtOpen.get(t) || 0;
         const isFreshSignal = newRowsByTicker.has(t);
         if (w > 1e-9 && !tradeEntry.has(t)) {
           const entryPrice = isFreshSignal ? a.entryPriceToday : (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null);
@@ -1136,6 +1157,21 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       buys: buysToday, sells: sellsToday,
       sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
     });
+
+    // --- 收盤後才讓weightNow依「盤中段報酬」自然漂移(同樣不重新正規化，理由同上方隔夜段
+    // 漂移的註解)，作為明天隔夜段的起始權重——今天的holdings/attribution顯示仍然是
+    // 「今天重新配置完」的乾淨目標權重(對照同事盤中段attribution也是顯示目標權重)，漂移
+    // 只影響「明天開盤前」的driftedAtOpen計算，這樣才跟同事「兩次配置之間權重隨股價自然
+    // 漂移、不強制加總回1」的每日結轉邏輯一致。---
+    for (const [t, w] of weightNow) {
+      const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
+      const priceEnd = priceArr ? priceArr[i] : null;
+      const priceStart = openArr ? openArr[i] : null;
+      const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
+      if (r != null) {
+        weightNow.set(t, w * (1 + r));
+      }
+    }
   }
 
   let cum = 0, cumTaiex = 0;

@@ -563,6 +563,26 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 if not np.isnan(open_now) and not np.isnan(prior_close) and prior_close != 0:
                     overnight_ret += w * (open_now / prior_close - 1)
 
+        # --- 隔夜段結束、出場/重新配置動作之前：先算「自然漂移後」的權重——不重新配置的話，
+        # 權重會因為股價漲跌從最後一次配置的目標值移動，公式跟同事backtest.js的
+        # positionReturns一樣：weight_t = weight_{t-1} * (1+個股報酬)。注意這裡「不」除以
+        # 整體報酬做重新正規化——同事的權重是「相對固定名目本金」的算術權重，不是每天都
+        # 强制加總回1的複利權重，這也是為什麼他的exposure/cashWeight每天會偏離1(用
+        # DAILY_PROFIT_WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回現金，不是隱性重新分配到
+        # 還持有的部位上)。這個漂移後的權重才是「今天開盤當下實際持有」的權重，出場/重新
+        # 配置的weight_before要用這個，不能繼續用「昨天配置完就再也不變」的舊weight_now——
+        # 不然SIGNAL_REBALANCE的weight_before/weight_after永遠一樣，跟同事真實交易紀錄
+        # (weight_before是漂移後的非整數值)對不起來，這就是主管要求的「每天不管有沒有訊號
+        # 都轉回目標權重」的前提。---
+        drifted_at_open: dict[str, float] = {}
+        for t, w in weight_now.items():
+            open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+            prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan) if prev_day is not None else np.nan
+            if not np.isnan(open_now) and not np.isnan(prior_close) and prior_close != 0:
+                drifted_at_open[t] = w * (open_now / prior_close)
+            else:
+                drifted_at_open[t] = w
+
         # --- 真出場檢查(對active資格池、不是只看今天有沒有權重)：達目標價用「前一天收盤價」
         # 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；調降訊號用
         # 「今天」是否生效判斷；持有天數用交易日數，從active設定的entry_idx算起。---
@@ -583,7 +603,8 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         for t, reason in exited:
             active.pop(t)
             exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-            old_w = weight_now.pop(t, 0.0)
+            old_w = drifted_at_open.pop(t, 0.0)
+            weight_now.pop(t, None)
             if t in trade_entry:
                 te = trade_entry.pop(t)
                 trades.append({
@@ -641,7 +662,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             new_weights = allocate_weights(combined_scores, p)
             for t, a in active.items():
                 w = float(new_weights.get(t, 0.0))
-                old_w = weight_now.get(t, 0.0)
+                old_w = drifted_at_open.get(t, 0.0)
                 is_fresh_signal = t in new_rows_by_ticker
                 if w > 1e-9 and t not in trade_entry:
                     entry_price = a.get("entry_price_today") if is_fresh_signal else (
@@ -686,6 +707,17 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             "daily_return": daily_ret,
             "taiex_return": taiex_ret_today,
         })
+
+        # --- 收盤後才讓weight_now依「盤中段報酬」自然漂移(同樣不重新正規化，理由同上方
+        # 隔夜段漂移的註解)，作為明天隔夜段的起始權重——今天的holdings/exposure顯示仍然是
+        # 「今天重新配置完」的乾淨目標權重，漂移只影響「明天開盤前」的drifted_at_open計算，
+        # 這樣才跟同事「兩次配置之間權重隨股價自然漂移、不強制加總回1」的每日結轉邏輯一致。---
+        for t in list(weight_now.keys()):
+            w = weight_now[t]
+            close_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
+            open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+            if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
+                weight_now[t] = w * (close_now / open_now)
 
     book = pd.DataFrame(rows).set_index("date")
     book["daily_return"] = book["daily_return"].fillna(0.0)
