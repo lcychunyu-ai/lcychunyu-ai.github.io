@@ -24,6 +24,62 @@ HEADERS = {
 }
 
 
+def get_last_known_targets(tickers):
+    """2026-07-28新增：查每檔股票目前資料庫裡最新一筆TARGET_PRICE事件的new_target，當作
+    「真正的前次目標價」基準。原本target_change_pct/old_target是從新聞標題自己講的
+    「幅度約X%」反推回去算的(new_target/(1+X%))，但標題講的百分比偶爾跟「相對上一篇
+    報告」對不起來(尤其是「維持目標價」的重申文章，標題還是會寫一個舊的、過期的百分比)，
+    導致target_change_pct被灌水，進而讓abnormal_revision異常升高、排進不該進的候選。
+    改成用「資料庫裡這檔股票最近一筆已知目標價」當基準重新計算，不信任新聞標題自報的
+    百分比——這是查證同事資料庫欄位calculated_revision_pct的真實算法後採用的方式。
+    """
+    if not tickers:
+        return {}
+    out = {}
+    chunk = list(tickers)
+    for i in range(0, len(chunk), 50):
+        batch = chunk[i:i + 50]
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/factset_revisions",
+            headers=HEADERS,
+            params={
+                "select": "ticker,date,news_time_taipei,new_target",
+                "ticker": f"in.({','.join(batch)})",
+                "event_type": "eq.TARGET_PRICE",
+                "direction": "in.(UP,DOWN)",
+                "order": "ticker.asc,date.asc,news_time_taipei.asc",
+                "limit": "50000",
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        for row in r.json():
+            if row.get("new_target") is not None:
+                out[row["ticker"]] = float(row["new_target"])  # 依序覆蓋，留下最後一筆(最新)
+    return out
+
+
+def recompute_revision_pct(rows):
+    """依「資料庫裡最近已知目標價」重新計算target_change_pct/old_target，不信任新聞標題
+    自報的百分比。同一批次內同一檔股票有多篇，依時間序依序鏈接(後一篇用前一篇剛算出的
+    new_target當基準)。沒有任何已知歷史(這檔股票第一次出現)才保留原本從標題反推的值。
+    """
+    tp_rows = [r for r in rows if r.get("event_type") == "TARGET_PRICE" and r.get("direction") in ("UP", "DOWN")]
+    tickers = {r["ticker"] for r in tp_rows if r.get("ticker")}
+    last_known = get_last_known_targets(tickers)
+    tp_rows.sort(key=lambda r: (r.get("ticker") or "", r.get("news_time") or ""))
+    for r in tp_rows:
+        ticker = r.get("ticker")
+        new_target = r.get("new_target")
+        if ticker is None or new_target is None:
+            continue
+        prev = last_known.get(ticker)
+        if prev is not None and prev != 0:
+            r["old_target"] = round(prev, 4)
+            r["target_change_pct"] = round((new_target / prev - 1) * 100, 4)
+        last_known[ticker] = new_target
+
+
 def row_for_revisions(r):
     return {
         "date": r["news_time"][:10] if r.get("news_time") else None,
@@ -68,6 +124,7 @@ def main():
         print("無新資料，結束")
         return
 
+    recompute_revision_pct(rows)
     revision_rows = [row_for_revisions(r) for r in rows]
     resp = requests.post(
         f"{SUPABASE_URL}/rest/v1/factset_revisions?on_conflict=source_url",

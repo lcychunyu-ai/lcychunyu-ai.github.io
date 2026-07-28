@@ -468,6 +468,13 @@ let RAW_UP_COUNT = 0;
 // 交易日曆)，只給動能/波動率回看窗口用，Map<ticker, {dates:[...], closes:[...]}>。
 let PRICES_RAW = new Map();
 
+// 2026-07-28新增：同事的新聞/股價資料庫本來就從2023-01-03才開始(FactSet/鉅亨網的樣本
+// 起點)，我們自己的stock_prices因為另外回補過2021年至今的歷史，回看窗口在資料最早期
+// (2023年1月)會比他湊得到更多天數，算出來的動能/波動率因此對不上——這段2021-2022的
+// 歷史對這個策略沒有實質意義(反正也沒有新聞訊號可以回測)，用戶決定跟同事版本對齊，
+// 回看窗口的下限鎖在跟他資料一樣的起點，不使用更早的歷史。
+const DATA_FLOOR_DATE = '2023-01-03';
+
 // 每檔股票各自往前找「執行日之前最近n個有效收盤價」，不受大盤交易日曆限制——對照同事
 // backtest.js的priorSeries()。dates/closes依日期字串(YYYY-MM-DD)排序，字串比較順序
 // 跟日期先後順序一致，可以直接用來二分搜尋。
@@ -480,7 +487,12 @@ function rawPriorWindow(ticker, beforeDateStr, n) {
     const mid = (lo + hi) >> 1;
     if (dates[mid] < beforeDateStr) lo = mid + 1; else hi = mid;
   }
-  return closes.slice(Math.max(0, lo - n), lo);
+  let floorIdx = 0, fhi = dates.length;
+  while (floorIdx < fhi) {
+    const mid = (floorIdx + fhi) >> 1;
+    if (dates[mid] < DATA_FLOOR_DATE) floorIdx = mid + 1; else fhi = mid;
+  }
+  return closes.slice(Math.max(floorIdx, lo - n), lo);
 }
 
 function bisectRight(arr, x) {
@@ -653,7 +665,11 @@ function prepareEvents(events) {
     // 波動率算出來就會跟同事版本對不上。改用rawPriorWindow()——每檔股票自己排序、
     // 沒有NaN空缺的原始序列，不受大盤日曆限制。
     let momentum20 = 0, relativeMomentum20 = 0, volatility20 = 0.35;
-    const windowStart = Math.max(0, entryIdx - 21);
+    // 大盤動能窗口下限也要對齊DATA_FLOOR_DATE，理由同rawPriorWindow——我們的TAIEX資料回溯
+    // 到2021年，同事的benchmarkMap只從2023-01-03開始，不鎖下限的話早期訊號的相對動能會
+    // 對不上他的版本。
+    const floorIdx = dateIdxMap.get(DATA_FLOOR_DATE) ?? 0;
+    const windowStart = Math.max(floorIdx, entryIdx - 21);
     const priceWindow = rawPriorWindow(e.ticker, DATES[entryIdx], 21);
     const taiexWindow = TAIEX.slice(windowStart, entryIdx).filter(v => v != null);
     if (priceWindow.length > 1) {

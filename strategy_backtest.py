@@ -48,6 +48,9 @@ SUPABASE_URL = "https://kiiwaojcetxmeycyupvn.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtpaXdhb2pjZXR4bWV5Y3l1cHZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1Mjk2NzAsImV4cCI6MjEwMDEwNTY3MH0.QPnEenJ8OtgWm1q3zhstinsAzXJAD6bunPp6JhrL4PU"
 SB_HEADERS = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"}
 
+# 同事的新聞/股價資料庫起點，動能/波動率回看窗口的下限對齊這一天(見_attach_enhanced_factors)。
+DATA_FLOOR_DATE = pd.Timestamp("2023-01-03")
+
 
 # ----------------------------------------------------------------------------
 # 1. 資料載入(改自Supabase，跟strategy.html同一個RPC/同一份資料)
@@ -289,16 +292,25 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
             # 往前多推一天，動能/波動率算出來就會跟同事版本對不上。改成優先用stock_price_raw
             # (每檔股票自己排序、沒有NaN空缺的原始序列)做日期比對，沒有raw資料才退回用
             # 對齊過的calendar序列(兼容舊呼叫方式)。
+            # 2026-07-28再修正：同事的新聞/股價資料庫本來就從2023-01-03才開始(FactSet/鉅亨網
+            # 的樣本起點)，我們自己的stock_price_raw因為另外回補過2021年至今的歷史，回看窗口
+            # 在資料最早期(2023年1月)會比他湊得到更多天數，動能/波動率因此算不一樣——這段
+            # 2021-2022的歷史反正也沒有新聞訊號可以回測，沒有實質意義，用戶決定跟同事版本
+            # 對齊，回看窗口下限鎖在跟他資料一樣的起點(DATA_FLOOR_DATE)，不用更早的歷史。
             raw_ser = stock_price_raw.get(ticker) if stock_price_raw else None
             if raw_ser is not None and len(raw_ser) > 0:
                 cut = raw_ser.index.searchsorted(execute_date, side="left")
-                window = raw_ser.iloc[max(0, cut - 21):cut]
+                floor_cut = raw_ser.index.searchsorted(DATA_FLOOR_DATE, side="left")
+                window = raw_ser.iloc[max(floor_cut, cut - 21):cut]
             else:
                 ser = stock_price.get(ticker)
                 pos = calendar.get_loc(execute_date)
                 window = ser.iloc[max(0, pos - 21):pos].dropna() if ser is not None else pd.Series(dtype=float)
+            # 大盤動能窗口下限也要對齊DATA_FLOOR_DATE，理由同上——calendar回溯到2021年，
+            # 同事的benchmarkMap只從2023-01-03開始，不鎖下限的話早期訊號的相對動能對不上。
             pos = calendar.get_loc(execute_date)
-            bench_window = taiex.iloc[max(0, pos - 21):pos]
+            floor_pos = calendar.get_loc(DATA_FLOOR_DATE) if DATA_FLOOR_DATE in calendar else 0
+            bench_window = taiex.iloc[max(floor_pos, pos - 21):pos]
             if len(window) > 1:
                 mom = window.iloc[-1] / window.iloc[0] - 1
                 rets = window.pct_change(fill_method=None).dropna()
