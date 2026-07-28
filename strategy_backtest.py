@@ -24,10 +24,14 @@
     - max_portfolio_exposure：投組層級總曝險上限(PDF只有單檔上限，沒有整體曝險上限)
 
 已知限制(誠實揭露，不是之後才發現)：
-    - 同一天同一股票多篇新聞，沿用資料庫view v_unified_target_events既有的去重邏輯
-      (優先TARGET_PRICE類型、其次analyst_count較高者)，跟PDF「取當日最後一篇」不完全一致，
-      差異只發生在極少數同日多篇的邊界案例，不重建。
     - 交易成本、滑價、漲跌停限制、EPS調升訊號混合，都不在這版基準裡，PDF本身也明講是下一步。
+
+2026-07-28修正：資料庫view v_unified_target_events原本用`DISTINCT ON (ticker,date)
+ORDER BY analyst_count DESC`去重，同一天同一股票有多篇新聞時會直接刪掉analyst_count較低
+的那篇，不管發布時間先後——這在同一個09:00執行窗口內有多篇獨立新聞時，會讓「發布時間較晚
+但分析師數較少」的真正有效訊號被資料庫層直接濾掉，永遠傳不到我們自己(prepare_events/
+dedupeByExecutionWindow)已經寫對的「同一執行窗口內取發布時間最晚者」邏輯手上。已改成
+view不做任何去重，把全部原始新聞都傳出來，去重完全交給應用層處理。
 
 2026-07-28更新：股價/大盤資料改直接從Supabase讀(stock_prices/taiex_index表，透過
 get_strategy_price_bundle() RPC一次拉回)，不再讀本機的factset_data/prices_full.json——
