@@ -1678,28 +1678,32 @@ let LAST_BEST_EXCESS = null;
 let LAST_RUN_SUMMARY = null;
 
 // ----------------------------------------------------------------------------
-// Out-of-Sample Optimization：選參流程對照optimizer.js的optimizeExecution()(兩段
-// walk-forward)，候選產生方式改成寬範圍隨機取樣，不再鎖死在他審過的固定離散點。
-// 192組候選：調升幅度∈[0,15]% × 分析師∈[0,25]位 × 上漲空間∈[0,20]% × 持有天數∈[5,60]日 ×
-// 最大持股∈[0,20](0=不限) 隨機取樣，配置法在[原始綜合分數,Enhanced]間隨機選，固定單檔
-// 上限20%、調降/達標都出場(這兩個是他的方法定義的行為，不是門檻，不開放)。兩段walk-forward：
-// 先用2023訓練→2024驗證排名，取前24名進第二輪，用2023-2024訓練→2025驗證再排名一次，
-// 兩輪分數加權平均選出最終參數；2026保留期只在最後套用一次、不參與選參數。
+// Out-of-Sample Optimization：選參流程+候選產生方式改回完全對照同事optimizer.js的
+// buildCandidates()——固定離散網格(不是隨機取樣)：
+// 調升幅度∈[0%,3%,6%] × 分析師∈[1位,3位] × 上漲空間∈[0%,5%] × 配置法∈[原始綜合分數,Enhanced]
+// × 持有天數∈[10日,20日] × 最大持股∈[0(不限),5,10,20]，共3×2×2×2×2×4=192組，跟他192組
+// 候選數字剛好對上(不是巧合，是同一份網格)。固定單檔上限20%、調降/達標都出場(他的方法
+// 定義的行為，不是門檻，不開放)。改用他這套「候選本身就從業務常識篩過」的離散網格，
+// 而不是之前的寬範圍隨機取樣——之前的隨機取樣會抽到「分析師門檻25位」這種實務上幾乎
+// 篩不到任何訊號的極端值，選出低曝險、不具代表性的參數(2026真複利超額報酬實測-23.66%，
+// 詳見git log)。兩段walk-forward流程不變：先用2023訓練→2024驗證排名，取前24名進第二輪，
+// 用2023-2024訓練→2025驗證再排名一次，兩輪分數加權平均選出最終參數；2026保留期只在
+// 最後套用一次、不參與選參數。
 // ----------------------------------------------------------------------------
-const OPT_SAMPLE_N = 192;
-const OPT_SEED = 42;
-
 function buildOptimizerCandidates(baseParams) {
-  const rng = mulberry32(OPT_SEED);
   const rows = [];
-  for (let i = 0; i < OPT_SAMPLE_N; i++) {
-    const minUpgradePct = Number(randRange(rng, 0, 15).toFixed(2));
-    const minAnalystCount = randInt(rng, 0, 25);
-    const minUpside = Number(randRange(rng, 0, 0.20).toFixed(4));
-    const sizingMode = randChoice(rng, ['composite', 'enhanced']);
-    const maxHoldDays = randInt(rng, 5, 60);
-    const maxPositions = randInt(rng, 0, 20);
-    rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const sizingMode of ['composite', 'enhanced']) {
+          for (const maxHoldDays of [10, 20]) {
+            for (const maxPositions of [0, 5, 10, 20]) {
+              rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+            }
+          }
+        }
+      }
+    }
   }
   return rows;
 }
