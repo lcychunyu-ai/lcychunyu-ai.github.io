@@ -1593,7 +1593,13 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
   };
 }
 
-document.getElementById('strict-search-btn').addEventListener('click', async () => {
+// 2026-07-28：抽成獨立函式讓init()也能呼叫並拿到選定參數——原本頁面一打開，主畫面顯示的
+// 是表單上寫死的手動預設值(調升3%/分析師3位/上漲空間5%等，只是同事表單原本的起始示範值，
+// 不是「最佳」或「最貼近事實」的參數)，兩段walk-forward選出來的真正驗證過的參數只會顯示
+// 在下方的「參數自動最佳化」卡片裡，要手動點「套用全期間」才會反映到主畫面——這會讓人誤以為
+// 首頁看到的數字就是最佳結果。改成頁面載入時自動把選定參數套回表單、重跑主畫面，讓「預設」
+// 真的等於「目前資料下驗證過最好的那組」，不是同事表單的示範起始值。
+async function runStrictSearchAndRender() {
   const btn = document.getElementById('strict-search-btn');
   const base = readParams();
   const testEnd = document.getElementById('p-end').value;
@@ -1664,7 +1670,10 @@ document.getElementById('strict-search-btn').addEventListener('click', async () 
   };
 
   renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
-});
+  return { selected, testEnd, isOverfit };
+}
+
+document.getElementById('strict-search-btn').addEventListener('click', () => { runStrictSearchAndRender(); });
 
 // ----------------------------------------------------------------------------
 // In-Sample Exploration：選參流程對照explorer.js的exploreExecution()(粗搜→取前8名→細調)，
@@ -1774,7 +1783,18 @@ document.getElementById('explore-search-btn').addEventListener('click', async ()
     document.getElementById('composite-params').style.display = document.getElementById('p-sizing').value === 'composite' ? '' : 'none';
     const { summary } = runAndRenderManual();
     LAST_RUN_SUMMARY = summary;
-    document.getElementById('strict-search-btn').click();
+    // 先用表單起始值跑一次(避免使用者在最佳化跑完前看到空白畫面)，最佳化完成後如果通過
+    // 樣本外驗證，就把選定參數套回表單、重跑主畫面，讓首頁預設直接等於驗證過的最佳結果；
+    // 如果沒通過驗證(過擬合)，保留表單原本的起始值，不要把有問題的參數當成預設推給使用者。
+    const searchResult = await runStrictSearchAndRender();
+    if (searchResult && !searchResult.isOverfit) {
+      applyParamsToForm(searchResult.selected.params);
+      document.getElementById('p-start').value = '2023-01-01';
+      document.getElementById('p-end').value = searchResult.testEnd;
+      const rerun = runAndRenderManual(LAST_BEST_EXCESS);
+      LAST_RUN_SUMMARY = rerun.summary;
+      renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
+    }
   } catch (err) {
     document.getElementById('loading-banner').style.display = 'none';
     const banner = document.getElementById('error-banner');
