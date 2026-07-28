@@ -1243,9 +1243,9 @@ function renderCards(summary, bestExcessInfo) {
         <div class="sub">策略 − 加權指數，左側面板目前這組參數</div>
       </div>
       <div class="stat-card">
-        <div class="label">訓練期最佳參數超額報酬</div>
+        <div class="label">訓練期最佳參數超額報酬 <span class="pill-badge caution">實驗性，不建議直接採用</span></div>
         <div class="value ${bestExcessInfo && bestExcessInfo.excess >= 0 ? 'up' : 'down'}">${bestExcessInfo ? fmtPct(bestExcessInfo.excess) : '—'}</div>
-        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}（不同於左側目前參數，見下方樣本外驗證）</div>
+        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}（我們自己優化器選出的參數，搜尋範圍/評分機制已知有選到低曝險組合的風險，不同於左側同事官方推薦參數，見下方樣本外驗證）</div>
       </div>
     </div>`;
 }
