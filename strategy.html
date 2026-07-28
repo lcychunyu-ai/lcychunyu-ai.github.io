@@ -284,18 +284,18 @@
         </div>
 
         <div class="param-row2">
-          <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="3" step="0.5"/><span class="suffix">%</span></div></div>
-          <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="3" step="1"/><span class="suffix">位</span></div></div>
+          <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="0" step="0.5"/><span class="suffix">%</span></div></div>
+          <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1"/><span class="suffix">位</span></div></div>
         </div>
 
         <div class="param-row2">
-          <div class="param-field"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="5" step="1"/><span class="suffix">%</span></div></div>
+          <div class="param-field"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="0" step="1"/><span class="suffix">%</span></div></div>
           <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5"/><span class="suffix">%</span></div></div>
         </div>
 
         <div class="param-row2">
-          <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="20" step="5"/><span class="suffix">交易日</span></div></div>
-          <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="0" step="1"/><span class="suffix">0=不限</span></div></div>
+          <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5"/><span class="suffix">交易日</span></div></div>
+          <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1"/><span class="suffix">0=不限</span></div></div>
         </div>
 
         <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5"/><span class="suffix">%</span></div></div>
@@ -1783,18 +1783,15 @@ document.getElementById('explore-search-btn').addEventListener('click', async ()
     document.getElementById('composite-params').style.display = document.getElementById('p-sizing').value === 'composite' ? '' : 'none';
     const { summary } = runAndRenderManual();
     LAST_RUN_SUMMARY = summary;
-    // 先用表單起始值跑一次(避免使用者在最佳化跑完前看到空白畫面)，最佳化完成後如果通過
-    // 樣本外驗證，就把選定參數套回表單、重跑主畫面，讓首頁預設直接等於驗證過的最佳結果；
-    // 如果沒通過驗證(過擬合)，保留表單原本的起始值，不要把有問題的參數當成預設推給使用者。
-    const searchResult = await runStrictSearchAndRender();
-    if (searchResult && !searchResult.isOverfit) {
-      applyParamsToForm(searchResult.selected.params);
-      document.getElementById('p-start').value = '2023-01-01';
-      document.getElementById('p-end').value = searchResult.testEnd;
-      const rerun = runAndRenderManual(LAST_BEST_EXCESS);
-      LAST_RUN_SUMMARY = rerun.summary;
-      renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
-    }
+    // 2026-07-28再次修正：上一版讓頁面自動套用「我們自己優化器選出的參數」當預設，
+    // 結果同事交接包的HANDOVER.md顯示，我們把候選網格從他審過的固定點改成寬範圍隨機取樣後，
+    // 統計上反而更難取樣到他刻意選定的「集中持股(5檔)+短天期(10日)」這個角落，訓練期
+    // 超額報酬因此比他的官方推薦值低了近20個百分點。改回不自動覆蓋表單——表單預設值
+    // 直接寫死成同事HANDOVER.md記錄的正式樣本外推薦參數(調升0%/分析師1位/上漲空間0%/
+    // 5檔/單檔20%/持有10日/Enhanced)，這是他小主管審過、有文件依據的參數，比我們優化器
+    // 目前找到的結果更可信。最佳化面板還是會照常跑，結果只顯示在自己的卡片裡供參考、
+    // 不會回頭覆蓋首頁預設。
+    runStrictSearchAndRender();
   } catch (err) {
     document.getElementById('loading-banner').style.display = 'none';
     const banner = document.getElementById('error-banner');
