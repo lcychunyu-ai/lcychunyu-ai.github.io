@@ -651,8 +651,14 @@ def summarize(book: pd.DataFrame, trades: pd.DataFrame, orders: Optional[pd.Data
     total_return = book["cum_return"].iloc[-1]
     ann_factor = 252 / max(len(book), 1)
     sharpe = (daily.mean() / daily.std() * np.sqrt(252)) if daily.std() > 0 else np.nan
+    # 2026-07-28修正：對照同事backtest.js的stats()——回撤要用「權益比峰值」算百分比
+    # ((1+cum)/(1+peak)-1)，不是直接拿累積報酬點數相減。算術累加報酬會一直往上疊加，
+    # 峰值(1+peak_cum)通常遠大於1，不除以這個峰值基期，算出來的回撤百分比會被系統性
+    # 高估(絕對值變大)——這正是這幾輪比對下來，我們的回撤數字一直比同事的大上不少、
+    # 但超額報酬跟Sharpe都已經對得很準的根因：excess/Sharpe沒受影響，因為它們的公式
+    # 本來就沒有這個「除以峰值基期」的步驟，只有回撤這個指標算錯。
     running_max = book["cum_return"].cummax()
-    max_dd = (book["cum_return"] - running_max).min()
+    max_dd = ((1 + book["cum_return"]) / (1 + running_max) - 1).min()
 
     if len(trades) > 0:
         trades = trades.copy()

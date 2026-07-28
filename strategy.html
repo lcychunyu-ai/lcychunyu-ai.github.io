@@ -1038,10 +1038,16 @@ function summarize(rows, trades, orders) {
   const dStd = daily.length > 1 ? stdSample(daily) : 0;
   const sharpe = dStd > 0 ? (dMean / dStd) * Math.sqrt(252) : null;
 
+  // 2026-07-28修正：對照同事backtest.js的stats()——回撤要用「權益比峰值」算百分比
+  // ((1+cum)/(1+peak)-1)，不是直接拿累積報酬點數相減。算術累加報酬會一直往上疊加，
+  // 峰值(1+peakCum)通常遠大於1，不除以這個峰值基期，算出來的回撤百分比會被系統性
+  // 高估——這正是這幾輪比對下來，我們的回撤數字一直比同事的大上不少、但超額報酬跟
+  // Sharpe都已經對得很準的根因：只有回撤這個指標算錯，其他指標的公式本來就沒有這個
+  // 「除以峰值基期」的步驟，不受影響。
   let runningMax = -Infinity, maxDD = 0;
   for (const r of rows) {
     runningMax = Math.max(runningMax, r.cumReturn);
-    maxDD = Math.min(maxDD, r.cumReturn - runningMax);
+    maxDD = Math.min(maxDD, (1 + r.cumReturn) / (1 + runningMax) - 1);
   }
 
   const closedTrades = trades.filter(t => t.exitPrice != null);
@@ -1112,7 +1118,11 @@ function stabilityAssessment(baseParams, startDate, endDate, baseResult) {
   const scale = Math.max(0.05, Math.abs(baseExcess));
   const sensitivityScore = Math.round(25 * clamp01(1 - meanDeviation / scale, 0, 1) * 10) / 10;
 
-  const tradeAdequacy = clamp01(baseResult.summary.nTrades / 500, 0, 1);
+  // 2026-07-28修正：同事backtest.js的stats()回傳的tradeCount是trades.length，這個trades
+  // 是逐單完整帳本(notionalTrades，我們現在對應的是orders不是trades)，不是round-trip
+  // 進出場配對數。原本這裡用nTrades(round-trip，數字天生小很多)去對照他用order級距校準
+  // 出來的500/100這兩個門檻，會系統性低估樣本量分數、也更容易誤觸發「交易樣本偏少」警示。
+  const tradeAdequacy = clamp01((baseResult.summary.nOrders ?? baseResult.summary.nTrades) / 500, 0, 1);
   const periodAdequacy = clamp01(periods.length / 12, 0, 1);
   const sampleScore = Math.round(15 * (0.55 * tradeAdequacy + 0.45 * periodAdequacy) * 10) / 10;
 
@@ -1122,7 +1132,7 @@ function stabilityAssessment(baseParams, startDate, endDate, baseResult) {
   if (positiveRatio < 0.5) warnings.push('超額報酬為正的季度不到一半');
   if (maxDD < -0.3) warnings.push('最大回撤超過30%');
   if (sensitivityScore < 15) warnings.push('鄰近參數的結果變化較大');
-  if (baseResult.summary.nTrades < 100) warnings.push('交易樣本偏少');
+  if ((baseResult.summary.nOrders ?? baseResult.summary.nTrades) < 100) warnings.push('交易樣本偏少');
 
   return {
     total, grade,
