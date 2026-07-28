@@ -710,10 +710,20 @@ async function loadAll() {
 // 回測引擎 — 逐函式對照 strategy_backtest.py
 // ============================================================================
 
+// 2026-07-28修正：原本直接把沒通過門檻的事件整批丟掉，但同事backtest.js的applyEvents()
+// 對「沒通過門檻、但這檔股票已經持有中」的事件不是整篇忽略——會把目標價/分析師數更新到
+// 既有部位上(entryIndex跟分數不變，不算重新進場)，只有「沒通過門檻、且這檔股票目前沒
+// 持有」才會真的整篇忽略。改成保留所有有效價格資料的事件、加一個qualifies欄位，篩選
+// 判斷留到runBacktest的逐日迴圈依「這檔股票今天在不在active裡」分流處理。
 function filterCandidates(cands, p) {
   return cands
-    .filter(c => c.entryPrice != null && c.upsidePrice != null && c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside)
-    .map(c => ({ ...c, upsideUsed: c.upsidePrice, entryPriceUsed: c.entryPrice }));
+    .filter(c => c.entryPrice != null && c.upsidePrice != null)
+    .map(c => ({
+      ...c,
+      upsideUsed: c.upsidePrice,
+      entryPriceUsed: c.entryPrice,
+      qualifies: c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside,
+    }));
 }
 
 // 直接對照同事backtest.js的signalScore()『enhanced』分支，逐項複製，不是重新設計。
@@ -920,21 +930,38 @@ function runBacktest(p, startDate, endDate) {
       }
     }
 
-    // --- 新訊號：更新/加入active資格池，重設entryIdx跟目標價——新訊號代表重新起算
-    // 持有天數，不管這檔股票今天在不在active裡都要覆蓋。---
+    // --- 新訊號：合格的更新/加入active資格池，重設entryIdx跟目標價——新訊號代表重新起算
+    // 持有天數，不管這檔股票今天在不在active裡都要覆蓋。不合格的訊號(例如用自己的參考價
+    // 算出來上漲空間不夠)如果這檔股票「已經在active裡」，對照同事backtest.js的applyEvents()
+    // 「else if(active.has(ticker))」分支，只更新目標價，entryIdx/score/進場價都不動——
+    // 不是整篇忽略，這則新聞至少讓既有部位的出場門檻(達目標價出場)用到最新的價位；如果
+    // 這檔股票目前沒持有，才真的整篇忽略。---
     const buysToday = [];
     const newRowsByTicker = new Map(); // ticker -> {row, score}
+    const updateOnlyByTicker = new Map(); // ticker -> row(只更新目標價)
     if (entriesByIdx.has(i)) {
       const todaysAll = entriesByIdx.get(i);
       if (todaysAll.length > 0) {
-        const scoresArr = p.sizingMode === 'multifactor'
-          ? scoreMultifactorBatch(todaysAll, p)
-          : todaysAll.map(c => scoreOne(c, p));
-        todaysAll.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
+        // 分數只算合格的那些——multifactor這類看「同一批候選相對排名」的算法，分母/中位數
+        // 統計不該被不合格的候選(它們不會真的進場，只用來更新目標價)汙染。
+        const qualifying = todaysAll.filter(c => c.qualifies);
+        if (qualifying.length > 0) {
+          const scoresArr = p.sizingMode === 'multifactor'
+            ? scoreMultifactorBatch(qualifying, p)
+            : qualifying.map(c => scoreOne(c, p));
+          qualifying.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
+        }
+        todaysAll.filter(c => !c.qualifies).forEach(c => {
+          if (newRowsByTicker.has(c.ticker)) return;
+          if (active.has(c.ticker)) updateOnlyByTicker.set(c.ticker, c);
+        });
       }
     }
     for (const [t, v] of newRowsByTicker) {
       active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed });
+    }
+    for (const [t, row] of updateOnlyByTicker) {
+      active.get(t).target = row.newTarget;
     }
 
     // --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，

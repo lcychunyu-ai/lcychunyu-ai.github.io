@@ -303,14 +303,21 @@ class StrategyParams:
 # ----------------------------------------------------------------------------
 
 def filter_candidates(ev: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    mask = (
-        ev["entry_price"].notna()
-        & ev["upside_price"].notna()
-        & (ev["target_change_pct"] >= p.min_upgrade_pct)
-        & (ev["analyst_count"] >= p.min_analyst_count)
-        & (ev["upside_price"] >= p.min_upside)
+    # 2026-07-28修正：原本直接把沒通過門檻的事件整批丟掉，但同事backtest.js的applyEvents()
+    # 對「沒通過門檻、但這檔股票已經持有中」的事件不是整篇忽略——會把目標價/分析師數更新
+    # 到既有部位上(entryIndex跟分數不變，不算重新進場)，只有「沒通過門檻、且這檔股票目前
+    # 沒持有」才會真的整篇忽略。同一天同一股票常有好幾篇文章，後面那篇如果用「自己的」
+    # 參考價算出來的上漲空間不夠格，不代表這則新聞完全沒有資訊價值——它至少更新了最新的
+    # 目標價，可能讓既有部位提早觸發「達目標價出場」。改成保留所有有效價格資料的事件、
+    # 加一個qualifies欄位，篩選判斷留到run_backtest的逐日迴圈依「這檔股票今天在不在
+    # active裡」分流處理，不在這裡就整批濾掉。
+    valid = ev["entry_price"].notna() & ev["upside_price"].notna()
+    out = ev[valid].copy()
+    out["qualifies"] = (
+        (out["target_change_pct"] >= p.min_upgrade_pct)
+        & (out["analyst_count"] >= p.min_analyst_count)
+        & (out["upside_price"] >= p.min_upside)
     )
-    out = ev[mask].copy()
     out["upside_used"] = out["upside_price"]
     out["entry_price_used"] = out["entry_price"]
     return out
@@ -523,19 +530,42 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": old_w,
                                 "weight_after": 0.0, "weight_change": -old_w, "price": exit_price, "reason": reason})
 
-        # --- 新訊號：更新/加入active資格池，重設entry_idx跟目標價，不管這檔股票今天在不在
-        # active裡都要覆蓋——新訊號代表重新起算持有天數，不能拿舊訊號殘留的資訊繼續判斷。---
+        # --- 新訊號：合格的更新/加入active資格池，重設entry_idx跟目標價，不管這檔股票今天
+        # 在不在active裡都要覆蓋——新訊號代表重新起算持有天數，不能拿舊訊號殘留的資訊繼續
+        # 判斷。不合格的訊號(例如用自己的參考價算出來上漲空間不夠)如果這檔股票「已經在
+        # active裡」，對照同事backtest.js的applyEvents()「else if(active.has(ticker))」分支，
+        # 只更新目標價，entry_idx/score/進場價都不動——不是整篇忽略，這則新聞至少讓既有
+        # 部位的出場門檻(達目標價出場)用到最新的價位；如果這檔股票目前沒持有，才真的整篇
+        # 忽略，不會無中生有創造一筆持股。---
         new_rows_by_ticker = {}
+        update_only_by_ticker = {}
         if day in entries_by_date.groups:
             todays = entries_by_date.get_group(day)
             if len(todays) > 0:
-                scores = score_candidates(todays, p, stock_price, calendar)
-                scores.index = todays["ticker"].values
-                scores = scores[~scores.index.duplicated(keep="last")]
-                for t in scores.index:
-                    new_rows_by_ticker[t] = (todays[todays["ticker"] == t].iloc[0], scores[t])
+                # 分數只算合格的那些——multifactor這類看「同一批候選相對排名」的算法，
+                # 分母/中位數統計不該被不合格的候選(它們不會真的進場，只用來更新目標價)
+                # 汙染，維持跟filter_candidates還在整批過濾時同樣的統計母體。
+                qualifying = todays[todays["qualifies"]]
+                if len(qualifying) > 0:
+                    scores = score_candidates(qualifying, p, stock_price, calendar)
+                    scores.index = qualifying["ticker"].values
+                    qualifying_by_ticker = {t: row for t, row in zip(qualifying["ticker"].values, qualifying.to_dict("records"))}
+                    scores = scores[~scores.index.duplicated(keep="last")]
+                    for t in scores.index:
+                        new_rows_by_ticker[t] = (qualifying_by_ticker[t], scores[t])
+                # 同一天同一ticker可能有多筆，取最後一筆(對照JS版Map.set的慣例)：不合格
+                # 的那篇如果這檔股票已經合格進場(上面已經處理過)，就不算update-only，
+                # 只有「不合格、且沒有其他合格筆數把它蓋過去」時才走update-only分支。
+                non_qualifying = todays[~todays["qualifies"]]
+                for t, row in zip(non_qualifying["ticker"].values, non_qualifying.to_dict("records")):
+                    if t in new_rows_by_ticker:
+                        continue
+                    if t in active:
+                        update_only_by_ticker[t] = row
         for t, (row, s) in new_rows_by_ticker.items():
             active[t] = {"entry_idx": day_idx, "target": row["new_target"], "score": s, "entry_price_today": row["entry_price_used"]}
+        for t, row in update_only_by_ticker.items():
+            active[t]["target"] = row["new_target"]
 
         # --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
         # 固定資本每日平帳：總曝險才會真的每天都保證不超過max_portfolio_exposure。今天沒被
