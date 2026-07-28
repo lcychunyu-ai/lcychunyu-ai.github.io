@@ -699,25 +699,32 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         # 報酬永遠算0，不看taiex_ret.get(day)實際值是多少。
         taiex_ret_today = 0.0 if day_idx == 0 else taiex_ret.get(day, np.nan)
 
+        # --- exposure欄位對照同事的定義：不是「今天重新配置完」的乾淨目標權重總和(那個
+        # 恆等於1)，是「今天盤中段自然漂移『後』」的權重總和——同事的exposure/cashWeight
+        # 每天會偏離1，是因為他用DAILY_PROFIT_WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回
+        # 現金，不是隱性重新分配到持倉上。drifted_at_close同時也是明天隔夜段的起始權重。---
+        drifted_at_close: dict[str, float] = {}
+        for t, w in weight_now.items():
+            close_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
+            open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+            if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
+                drifted_at_close[t] = w * (close_now / open_now)
+            else:
+                drifted_at_close[t] = w
+
         rows.append({
             "date": day,
             "holdings": ",".join(weight_now.keys()),
             "n_positions": len(weight_now),
-            "exposure": sum(weight_now.values()),
+            "exposure": sum(drifted_at_close.values()),
             "daily_return": daily_ret,
             "taiex_return": taiex_ret_today,
         })
 
-        # --- 收盤後才讓weight_now依「盤中段報酬」自然漂移(同樣不重新正規化，理由同上方
-        # 隔夜段漂移的註解)，作為明天隔夜段的起始權重——今天的holdings/exposure顯示仍然是
-        # 「今天重新配置完」的乾淨目標權重，漂移只影響「明天開盤前」的drifted_at_open計算，
-        # 這樣才跟同事「兩次配置之間權重隨股價自然漂移、不強制加總回1」的每日結轉邏輯一致。---
-        for t in list(weight_now.keys()):
-            w = weight_now[t]
-            close_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
-            open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-            if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
-                weight_now[t] = w * (close_now / open_now)
+        # --- 收盤後把weight_now換成剛剛算好的drifted_at_close，作為明天隔夜段的起始
+        # 權重——今天的holdings/exposure顯示仍然是「今天重新配置完」的乾淨目標權重，
+        # 漂移只影響「明天開盤前」的drifted_at_open計算。---
+        weight_now.update(drifted_at_close)
 
     book = pd.DataFrame(rows).set_index("date")
     book["daily_return"] = book["daily_return"].fillna(0.0)

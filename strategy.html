@@ -1148,30 +1148,39 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
     // 不看TAIEX_RET[startIdx]實際值是多少。
     const taiexRet = i === startIdx ? 0 : (TAIEX_RET[i] != null ? TAIEX_RET[i] : 0);
 
-    rows.push({
-      idx: i, date: day,
-      holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
-      attribution, overnightAttribution,
-      nPositions: weightNow.size,
-      dailyReturn: dailyRet, taiexReturn: taiexRet,
-      buys: buysToday, sells: sellsToday,
-      sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
-    });
-
-    // --- 收盤後才讓weightNow依「盤中段報酬」自然漂移(同樣不重新正規化，理由同上方隔夜段
-    // 漂移的註解)，作為明天隔夜段的起始權重——今天的holdings/attribution顯示仍然是
-    // 「今天重新配置完」的乾淨目標權重(對照同事盤中段attribution也是顯示目標權重)，漂移
-    // 只影響「明天開盤前」的driftedAtOpen計算，這樣才跟同事「兩次配置之間權重隨股價自然
-    // 漂移、不強制加總回1」的每日結轉邏輯一致。---
+    // --- exposure欄位對照同事的定義：不是「今天重新配置完」的乾淨目標權重總和(那個
+    // 恆等於1，因為每次都用maxPortfolioExposure水位填滿)，是「今天盤中段自然漂移『後』」
+    // 的權重總和——同事的exposure/cashWeight每天會偏離1，是因為他用DAILY_PROFIT_
+    // WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回現金，不是隱性重新分配到持倉上，所以
+    // exposure = 1 + 當天盤中段總貢獻(約略，因為隔夜段的損益已經在前一天結算過了)。
+    // 這裡先算出漂移後的權重(driftedAtClose)，取代原本收盤後才另外算一次的做法。
+    const driftedAtClose = new Map();
     for (const [t, w] of weightNow) {
       const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
       const priceEnd = priceArr ? priceArr[i] : null;
       const priceStart = openArr ? openArr[i] : null;
       const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
-      if (r != null) {
-        weightNow.set(t, w * (1 + r));
-      }
+      driftedAtClose.set(t, r != null ? w * (1 + r) : w);
     }
+    let exposure = 0;
+    for (const w of driftedAtClose.values()) exposure += w;
+
+    rows.push({
+      idx: i, date: day,
+      holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
+      attribution, overnightAttribution,
+      nPositions: weightNow.size, exposure,
+      dailyReturn: dailyRet, taiexReturn: taiexRet,
+      buys: buysToday, sells: sellsToday,
+      sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
+    });
+
+    // --- 收盤後把weightNow換成剛剛就算好的driftedAtClose(盤中段自然漂移後、同樣不重新
+    // 正規化的權重)，作為明天隔夜段的起始權重——今天的holdings/attribution顯示仍然是
+    // 「今天重新配置完」的乾淨目標權重(對照同事盤中段attribution也是顯示目標權重)，漂移
+    // 只影響「明天開盤前」的driftedAtOpen計算，這樣才跟同事「兩次配置之間權重隨股價自然
+    // 漂移、不強制加總回1」的每日結轉邏輯一致。---
+    for (const [t, w] of driftedAtClose) weightNow.set(t, w);
   }
 
   let cum = 0, cumTaiex = 0;
@@ -1560,7 +1569,7 @@ function renderLedgerDetail() {
       <table class="book-table">
         <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
         <tbody>${rows.slice().reverse().slice(0, 60).map(rr => {
-          const exposure = rr.holdings.reduce((s, h) => s + h.weight, 0) * 100;
+          const exposure = rr.exposure * 100;
           const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
           return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
         }).join('')}</tbody>
@@ -1582,7 +1591,7 @@ function exportCsv() {
   const lines = [header.join(',')];
   rows.forEach(r => {
     const holdingsStr = r.holdings.map(h => `${h.ticker}:${(h.weight * 100).toFixed(2)}`).join(';');
-    const exposure = r.holdings.reduce((s, h) => s + h.weight, 0);
+    const exposure = r.exposure;
     const benchmarkPriceCumulative = (taiexBase != null && TAIEX[r.idx] != null) ? (TAIEX[r.idx] / taiexBase - 1) : null;
     lines.push([
       r.date,
