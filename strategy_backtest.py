@@ -397,7 +397,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                   stock_price_open: Optional[dict] = None) -> dict:
     period_cal = calendar[(calendar >= start) & (calendar <= end)]
     if len(period_cal) == 0:
-        return {"daily_book": pd.DataFrame(), "summary": {}, "trades": pd.DataFrame()}
+        return {"daily_book": pd.DataFrame(), "summary": {}, "trades": pd.DataFrame(), "orders": pd.DataFrame()}
 
     if down_lookup is None:
         down_lookup = lambda d: set()
@@ -410,6 +410,13 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     holdings: dict[str, dict] = {}  # ticker -> {weight, entry_date, entry_price}
     rows = []
     trades = []
+    # 2026-07-28新增：orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要
+    # 權重有變動(進場/出場/既有持股單純被重新配置到新權重)都各記一筆BUY/SELL，不是只記
+    # 「進場到出場」這種round-trip摘要(trades沿用舊格式，win_rate/payoff_ratio還是靠它算)。
+    # 既有持股「只改權重、不出場」這個動作原本完全沒被記錄，等於報酬計算已經假設你每天
+    # 真的有下單調整部位，交易紀錄卻假裝沒發生過——這裡補上讓兩份紀錄口徑一致，也讓我們
+    # 的交易數第一次能跟同事的tradeCount直接比。
+    orders = []
 
     entries_by_date = cands_all.groupby("entry_date")
 
@@ -446,11 +453,14 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 exited.append((t, reason))
         for t, reason in exited:
             h = holdings.pop(t)
+            exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
             trades.append({
                 "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
+                "entry_price": h["entry_price"], "exit_price": exit_price,
                 "reason": reason,
             })
+            orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
+                            "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": reason})
 
         # --- 新進場候選(含「已持有但又有新訊號」的股票——這種要當成重新進場處理：
         # 更新目標價、重新起算持有天數，不能拿舊的、過時的目標價繼續判斷出場) ---
@@ -484,28 +494,48 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
                         "entry_price": row["entry_price_used"], "target": row["new_target"], "score": s,
                     }
+                    orders.append({"date": day, "ticker": t, "side": "BUY", "weight_before": 0.0,
+                                    "weight_after": new_weights[t], "weight_change": new_weights[t],
+                                    "price": row["entry_price_used"], "reason": "QUALIFIED_UPGRADE"})
                 elif t in holdings:
                     # 已持有的股票這次雖然又有新訊號，但新分數沒擠進名額——原本的邏輯
                     # 縫隙是這裡什麼都不做，導致舊權重留著沒被清掉，總曝險偷偷超過100%。
                     # 這裡要跟一般被擠出排名一樣處理：出場。
                     h = holdings.pop(t)
+                    exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
                     trades.append({
                         "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                        "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
+                        "entry_price": h["entry_price"], "exit_price": exit_price,
                         "reason": "排名被擠出",
                     })
+                    orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
+                                    "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": "RANKED_OUT"})
             for t in list(holdings.keys()):
                 if t in new_rows_by_ticker:
                     continue  # 剛加入/已處理過的在上面設好權重或出場了
                 if t in new_weights.index and new_weights[t] > 0:
+                    # 2026-07-28新增：既有持股「維持在名單內、但權重被重新配置」也是真實下單
+                    # 行為——隔夜漲跌讓部位偏離目標權重，開盤前本來就要買賣調整回新權重，不是
+                    # bookkeeping假動作。之前這裡完全沒記錄，等於報酬計算已經假設你下了這筆單，
+                    # 交易紀錄卻沒承認它發生過。
+                    before = holdings[t]["weight"]
                     holdings[t]["weight"] = new_weights[t]
+                    delta = new_weights[t] - before
+                    if abs(delta) > 1e-9:
+                        open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+                        orders.append({"date": day, "ticker": t, "side": "BUY" if delta > 0 else "SELL",
+                                        "weight_before": before, "weight_after": new_weights[t],
+                                        "weight_change": delta, "price": open_now, "reason": "SIGNAL_REBALANCE"})
                 else:
                     h = holdings.pop(t)
+                    exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
                     trades.append({
                         "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                        "entry_price": h["entry_price"], "exit_price": (stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan),
+                        "entry_price": h["entry_price"], "exit_price": exit_price,
                         "reason": "排名被擠出",
                     })
+                    orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
+                                    "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": "RANKED_OUT"})
 
         # --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。
         # 不管是今天新進場還是本來就持有、繼續留著的部位，都用今天的新權重算這段
@@ -538,8 +568,9 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     book["excess"] = book["cum_return"] - book["cum_taiex"]
 
     trades_df = pd.DataFrame(trades)
-    summary = summarize(book, trades_df)
-    return {"daily_book": book, "summary": summary, "trades": trades_df}
+    orders_df = pd.DataFrame(orders)
+    summary = summarize(book, trades_df, orders_df)
+    return {"daily_book": book, "summary": summary, "trades": trades_df, "orders": orders_df}
 
 
 def down_tickers_on_factory(ev_full: pd.DataFrame, calendar: pd.DatetimeIndex):
@@ -555,7 +586,7 @@ def down_tickers_on_factory(ev_full: pd.DataFrame, calendar: pd.DatetimeIndex):
 # 6. 績效摘要
 # ----------------------------------------------------------------------------
 
-def summarize(book: pd.DataFrame, trades: pd.DataFrame) -> dict:
+def summarize(book: pd.DataFrame, trades: pd.DataFrame, orders: Optional[pd.DataFrame] = None) -> dict:
     if len(book) == 0:
         return {}
     daily = book["daily_return"]
@@ -584,6 +615,9 @@ def summarize(book: pd.DataFrame, trades: pd.DataFrame) -> dict:
         "sharpe": round(sharpe, 2) if not np.isnan(sharpe) else None,
         "max_drawdown_pct": round(max_dd * 100, 2),
         "n_trades": len(trades),
+        # n_orders：對照同事backtest.js的tradeCount，逐單完整計數(進場+出場+既有持股的權重
+        # 再平衡)，才是能跟同事「交易數」直接比較的口徑；n_trades是round-trip(一筆完整進出場)。
+        "n_orders": len(orders) if orders is not None else None,
         "win_rate_pct": round(win_rate * 100, 2) if not np.isnan(win_rate) else None,
         "payoff_ratio": round(payoff, 2) if payoff and not np.isnan(payoff) else None,
         "trading_days": len(book),
@@ -603,9 +637,20 @@ if __name__ == "__main__":
     print(f"日曆交易日數: {len(calendar)}，範圍 {calendar[0].date()} ~ {calendar[-1].date()}")
 
     # --- 前瞻偏差檢查 ---
-    bad = ev[ev["entry_date"] <= ev["date"]]
-    assert len(bad) == 0, f"發現{len(bad)}筆進場日沒有晚於訊號日，前瞻偏差！"
-    print("前瞻偏差檢查通過：所有進場日都嚴格晚於訊號日\n")
+    # 2026-07-28修正：這裡原本寫entry_date<=date整批當作前瞻偏差，是09:00執行時間窗口
+    # 規則上線前留下的舊檢查，沒有跟著更新。09:00規則刻意允許entry_date==date(新聞在
+    # 當天09:00前公布，當天開盤還來得及反應，用當天開盤價進場)，這不是前瞻偏差，是合理
+    # 規則；真正的前瞻偏差只有entry_date<date(進場日還早於訊號公布日，不可能發生)。
+    # 這個舊assert因為從09:00規則上線後就沒被重新跑過(平常都是直接呼叫run_backtest或
+    # 網站JS版)，一直沒發現自己已經過期——直到用同事的資料庫重跑這個腳本才觸發，證明
+    # 自己資料的352筆當日進場案例其實一直是對的，錯的是這行舊檢查本身。
+    strict_lookahead = ev[ev["entry_date"] < ev["date"]]
+    assert len(strict_lookahead) == 0, f"發現{len(strict_lookahead)}筆進場日早於訊號日，真的前瞻偏差！"
+    same_day = ev[ev["entry_date"] == ev["date"]]
+    bad_same_day = same_day[same_day["news_time_taipei"].isna() | (same_day["news_time_taipei"] >= "09:00:00")]
+    assert len(bad_same_day) == 0, f"發現{len(bad_same_day)}筆當日進場但新聞是09:00後才公布，前瞻偏差！"
+    print(f"前瞻偏差檢查通過：所有進場日都不早於訊號日，其中{len(same_day)}筆是09:00前公布、"
+          f"當天開盤進場(合理)，其餘{len(ev) - len(same_day)}筆是隔一交易日以後才進場\n")
 
     baseline = StrategyParams()
     periods = [("訓練期2023-2024", "2023-01-01", "2024-12-31"),

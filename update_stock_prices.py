@@ -96,14 +96,21 @@ def main():
                     close = close.iloc[:, 0]
                 if hasattr(open_, "columns"):
                     open_ = open_.iloc[:, 0]
-                merged = close.to_frame("close").join(open_.to_frame("open")).dropna(how="all")
+                # 2026-07-28修正：原本用dropna(how="all")，只要open/close其中一個有值就會寫進資料庫，
+                # 等於允許close=null的殘缺列被upsert進stock_prices/taiex_index——這種列一旦進了
+                # taiex_index，因為taiex_index本身就是回測引擎拿來當交易日曆基準的表，就會讓那個
+                # 交易日「看起來存在」但close是null，我們自己的引擎有fillna(0)防呆所以沒事，但
+                # 同事的引擎沒防呆，close/前收-1直接把null當0算，炸出離譜的單日-100%。改成
+                # dropna(how="any")，open/close只要缺一個就整列不寫，寧可那天暫時沒資料(等下次
+                # 排程重跑再補)，也不要寫一筆看似存在、實際上殘缺的資料進資料庫。
+                merged = close.to_frame("close").join(open_.to_frame("open")).dropna(how="any")
                 if len(merged) == 0:
                     continue
                 for d, row in merged.iterrows():
                     price_rows.append({
                         "ticker": t, "date": d.strftime("%Y-%m-%d"),
-                        "close": None if pd.isna(row["close"]) else float(row["close"]),
-                        "open": None if pd.isna(row["open"]) else float(row["open"]),
+                        "close": float(row["close"]),
+                        "open": float(row["open"]),
                     })
                 ok = True
                 break
@@ -126,11 +133,12 @@ def main():
         tclose = tclose.iloc[:, 0]
     if hasattr(topen, "columns"):
         topen = topen.iloc[:, 0]
-    tmerged = tclose.to_frame("close").join(topen.to_frame("open")).dropna(how="all")
+    # 同上：taiex_index是交易日曆基準表，close絕對不能寫null進去，open/close缺一個就整列跳過。
+    tmerged = tclose.to_frame("close").join(topen.to_frame("open")).dropna(how="any")
     taiex_rows = [{
         "date": d.strftime("%Y-%m-%d"),
-        "close": None if pd.isna(row["close"]) else float(row["close"]),
-        "open": None if pd.isna(row["open"]) else float(row["open"]),
+        "close": float(row["close"]),
+        "open": float(row["open"]),
     } for d, row in tmerged.iterrows()]
     print(f"TAIEX筆數: {len(taiex_rows)}")
     if taiex_rows:
