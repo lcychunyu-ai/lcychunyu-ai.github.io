@@ -514,7 +514,21 @@ function resolveExecutionIdx(dateStr, timeStr) {
 // 的歷史事件依發布時間排序算基準值——abnormalRevision(相對該股過去365天|調升幅度|
 // 中位數)、recentUpgrades60(過去60天內調升次數+1)。回傳Map，key='ticker|date'。
 function computeRevisionHistory(events) {
-  const all = events.slice().sort((a, b) => {
+  // 2026-07-28修正：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行
+  // 時間窗口如果有兩篇以上獨立新聞(各自都通過他資料庫自己的查重判定、不算彼此重複)，
+  // 同事的引擎先去重成「只留發布時間最晚的那篇」，才拿這份已去重的新聞流去算歷史因子。
+  // 原本這裡是拿還沒去重的原始新聞流去算，導致被丟棄的重複新聞還是被算進「過去調升次數」
+  // 統計裡，把recentUpgrades60灌水；早期資料量少時這個灌水的影響被放大，是訓練期超額
+  // 報酬比同事官方數字低一截的根因之一。
+  const withExecIdx = events.map(e => ({ ...e, _execIdx: resolveExecutionIdx(e.date, e.news_time_taipei) })).filter(e => e._execIdx != null);
+  const sortedByPublish = withExecIdx.slice().sort((a, b) => {
+    const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
+    const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
+    return ta.localeCompare(tb);
+  });
+  const latestByWindow = new Map();
+  for (const e of sortedByPublish) latestByWindow.set(`${e.ticker}|${e._execIdx}`, e);
+  const all = [...latestByWindow.values()].sort((a, b) => {
     const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
     const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
     return ta.localeCompare(tb);
@@ -800,62 +814,77 @@ function runBacktest(p, startDate, endDate) {
     entriesByIdx.get(c.entryIdx).push(c);
   });
 
-  const holdings = new Map(); // ticker -> {weight, entryIdx, entryDate, entryPrice, target}
+  // 2026-07-28重寫：對照同事backtest.js的active/weights雙軌設計。原本「排名被擠出」直接
+  // 把股票從holdings刪掉，之後要再進場一定得等一則全新的新聞訊號——但同事的引擎不是這樣：
+  // 「排名被擠出」只是那天權重被壓到0(active裡的資格保留)，不是真的離開。只有真正達目標價/
+  // 調降/超過最長持有天數，才會把它從active名單踢出。這代表一檔被擠出的股票，隔幾天如果
+  // 競爭對手自己出場、名額空出來，同事的引擎會讓它「不需要任何新新聞」就自動用原本(可能已經
+  // 是好幾天前)的舊分數重新拿回權重。active(資格池)跟weightNow(今天實際權重)拆成兩個獨立
+  // 狀態才對得起來。
+  const active = new Map();    // ticker -> {entryIdx, target, score, entryPriceToday}
+  const weightNow = new Map(); // ticker -> 今天實際權重，只放weight>0的
+  const tradeEntry = new Map(); // ticker -> {entryDate, entryPrice}：這次active任期內第一次拿到權重時鎖定
   const rows = [];
   const trades = [];
-  // 2026-07-28新增：orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要
-  // 權重有變動(進場/出場/既有持股單純被重新配置到新權重)都各記一筆BUY/SELL，不是只記
-  // 「進場到出場」這種round-trip摘要(trades沿用舊格式，win_rate/payoff_ratio還是靠它算)。
-  // 原本既有持股「只改權重、不出場」這個動作完全沒被記錄，等於報酬計算已經假設你每天
-  // 真的有下單調整部位，交易紀錄卻假裝沒發生過——這裡補上讓兩份紀錄口徑一致，同時也讓
-  // 我們的交易數第一次能跟同事的nOrders直接比。
+  // orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要權重有變動(進場/
+  // 出場/被擠出/重新配置)都各記一筆BUY/SELL(trades沿用round-trip格式，win_rate/payoff_ratio還是靠它算)。
   const orders = [];
 
   for (let i = startIdx; i <= endIdx; i++) {
     const day = DATES[i];
     const downToday = DOWN_BY_DATE.get(i) || new Set();
+    const prevDay = i > startIdx ? DATES[i - 1] : null;
 
-    // --- 隔夜段報酬：用「今天開盤前就已經持有」的部位、當時(昨天收盤後)的權重，
-    // 算「昨收→今開」這段報酬。今天才進場的部位還沒經歷這段，不計入。這段要在
-    // 出場/重新配置動作之前算，因為用的是「重新配置前」的舊權重。---
+    // --- 隔夜段報酬：用「今天開盤前實際持有」的部位、當時(昨天收盤後)的權重，
+    // 算「昨收→今開」這段報酬。這段要在出場/重新配置動作之前算。---
     let overnightRet = 0;
-    if (i > startIdx) {
-      for (const [t, h] of holdings) {
+    if (prevDay != null) {
+      for (const [t, w] of weightNow) {
         const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
         const openNow = openArr ? openArr[i] : null;
         const priorClose = priceArr ? priceArr[i - 1] : null;
         if (openNow != null && priorClose != null && priorClose !== 0) {
-          overnightRet += h.weight * (openNow / priorClose - 1);
+          overnightRet += w * (openNow / priorClose - 1);
         }
       }
     }
 
-    // --- 出場：達目標價用「前一天收盤價」判斷(對照今天開盤前就該知道的資訊，不能
-    // 用今天收盤價，那是還沒發生的事、會有前視偏誤)；持有天數用交易日數。---
+    // --- 真出場檢查(對active資格池，不是只看今天有沒有權重)：達目標價用「前一天收盤價」
+    // 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；持有天數用
+    // 交易日數，從active設定的entryIdx算起。---
     const toExit = [];
-    for (const [t, h] of holdings) {
-      const daysHeld = i - h.entryIdx;
+    for (const [t, a] of active) {
+      const daysHeld = i - a.entryIdx;
       const priceArr = PRICES[t];
       const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
       let reason = null;
       if (p.exitOnDown && downToday.has(t)) reason = '調降出場';
-      else if (p.exitOnTarget && priorClose != null && priorClose >= h.target) reason = '達目標價出場';
+      else if (p.exitOnTarget && priorClose != null && priorClose >= a.target) reason = '達目標價出場';
       else if (daysHeld >= p.maxHoldDays) reason = '超過最長持有天數';
       if (reason) toExit.push([t, reason]);
     }
+    const sellsToday = [];
     for (const [t, reason] of toExit) {
-      const h = holdings.get(t);
-      holdings.delete(t);
+      active.delete(t);
       const openArr = PRICES_OPEN[t];
       const exitPrice = openArr ? openArr[i] : null;
-      trades.push({ ticker: t, entryDate: h.entryDate, exitDate: day, entryPrice: h.entryPrice, exitPrice, reason });
-      orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: h.weight, weightAfter: 0, weightChange: -h.weight, price: exitPrice, reason });
+      const oldW = weightNow.get(t) || 0;
+      weightNow.delete(t);
+      if (tradeEntry.has(t)) {
+        const te = tradeEntry.get(t);
+        tradeEntry.delete(t);
+        trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
+        sellsToday.push({ ticker: t, reason });
+      }
+      if (oldW > 1e-9) {
+        orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPrice, reason });
+      }
     }
 
-    // --- 新進場候選(含「已持有但又有新訊號」的股票——這種要當成重新進場處理：
-    // 更新目標價、重新起算持有天數，不能拿舊的、過時的目標價繼續判斷出場) ---
-    const buysToday = [], sellsToday = toExit.map(([t, reason]) => ({ ticker: t, reason }));
-    const newRowsByTicker = new Map(); // ticker -> {row, score} (keep last，同一天同ticker重複時取最後一筆)
+    // --- 新訊號：更新/加入active資格池，重設entryIdx跟目標價——新訊號代表重新起算
+    // 持有天數，不管這檔股票今天在不在active裡都要覆蓋。---
+    const buysToday = [];
+    const newRowsByTicker = new Map(); // ticker -> {row, score}
     if (entriesByIdx.has(i)) {
       const todaysAll = entriesByIdx.get(i);
       if (todaysAll.length > 0) {
@@ -865,91 +894,58 @@ function runBacktest(p, startDate, endDate) {
         todaysAll.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
       }
     }
+    for (const [t, v] of newRowsByTicker) {
+      active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed });
+    }
 
-    // --- 每天都對「目前整個帳本(舊部位+今天新候選)」重新正規化權重 ---
-    // 固定資本每日平帳：不管前一天賺賠，隔天開盤前都會把整個投組還原回固定本金重新部署，
-    // 所以權重不能只更新「今天有變動的那一小部分」，要整批一起重算，總曝險才會真的
-    // 每天都保證不超過maxPortfolioExposure，不會有舊部位權重被放著不動、跟新配置疊加
-    // 導致總曝險偷偷超過100%的問題。
-    if (holdings.size > 0 || newRowsByTicker.size > 0) {
-      const combined = [];
-      for (const [t, h] of holdings) {
-        if (!newRowsByTicker.has(t)) combined.push({ ticker: t, score: h.score });
-      }
-      for (const [t, v] of newRowsByTicker) combined.push({ ticker: t, score: v.score });
+    // --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
+    // 固定資本每日平帳：總曝險才會真的每天都保證不超過maxPortfolioExposure。今天沒被
+    // 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
+    // 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。---
+    if (active.size > 0) {
+      const combined = [...active.entries()].map(([t, a]) => ({ ticker: t, score: a.score }));
       const newWeights = allocateWeights(combined, p);
-
-      for (const [t, v] of newRowsByTicker) {
-        const w = newWeights.get(t);
-        const row = v.row;
-        if (w != null && w > 0) {
-          holdings.set(t, { weight: w, entryIdx: i, entryDate: day, entryPrice: row.entryPriceUsed, target: row.newTarget, score: v.score });
-          buysToday.push({ ticker: t, price: row.entryPriceUsed, weight: w });
-          orders.push({ date: day, ticker: t, side: 'BUY', weightBefore: 0, weightAfter: w, weightChange: w, price: row.entryPriceUsed, reason: 'QUALIFIED_UPGRADE' });
-        } else if (holdings.has(t)) {
-          // 已持有的股票這次雖然又有新訊號，但新分數沒擠進名額——原本的邏輯縫隙是
-          // 這裡什麼都不做，導致舊權重留著沒被清掉，總曝險偷偷超過100%。這裡要跟
-          // 一般被擠出排名一樣處理：出場。
-          const h = holdings.get(t);
-          holdings.delete(t);
-          const openArr = PRICES_OPEN[t];
-          const exitPrice = openArr ? openArr[i] : null;
-          trades.push({ ticker: t, entryDate: h.entryDate, exitDate: day, entryPrice: h.entryPrice, exitPrice, reason: '排名被擠出' });
-          sellsToday.push({ ticker: t, reason: '排名被擠出' });
-          orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: h.weight, weightAfter: 0, weightChange: -h.weight, price: exitPrice, reason: 'RANKED_OUT' });
+      for (const [t, a] of active) {
+        const w = newWeights.get(t) || 0;
+        const oldW = weightNow.get(t) || 0;
+        const isFreshSignal = newRowsByTicker.has(t);
+        if (w > 1e-9 && !tradeEntry.has(t)) {
+          const entryPrice = isFreshSignal ? a.entryPriceToday : (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null);
+          tradeEntry.set(t, { entryDate: day, entryPrice });
+          if (isFreshSignal) buysToday.push({ ticker: t, price: a.entryPriceToday, weight: w });
         }
-      }
-      for (const t of [...holdings.keys()]) {
-        if (newRowsByTicker.has(t)) continue;
-        const w = newWeights.get(t);
-        if (w != null && w > 0) {
-          // 2026-07-28新增：既有持股「維持在名單內、但權重被重新配置」也是真實下單行為——
-          // 隔夜漲跌讓部位偏離目標權重，開盤前本來就要買賣調整回新權重，不是bookkeeping假動作。
-          // 之前這裡完全沒記錄，等於報酬計算已經假設你下了這筆單，交易紀錄卻沒承認它發生過。
-          const before = holdings.get(t).weight;
-          holdings.get(t).weight = w;
-          const delta = w - before;
-          if (Math.abs(delta) > 1e-9) {
-            const openArr = PRICES_OPEN[t];
-            orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: before, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason: 'SIGNAL_REBALANCE' });
-          }
-        } else {
-          const h = holdings.get(t);
-          holdings.delete(t);
+        const delta = w - oldW;
+        if (Math.abs(delta) > 1e-9) {
           const openArr = PRICES_OPEN[t];
-          const exitPrice = openArr ? openArr[i] : null;
-          trades.push({ ticker: t, entryDate: h.entryDate, exitDate: day, entryPrice: h.entryPrice, exitPrice, reason: '排名被擠出' });
-          sellsToday.push({ ticker: t, reason: '排名被擠出' });
-          orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: h.weight, weightAfter: 0, weightChange: -h.weight, price: exitPrice, reason: 'RANKED_OUT' });
+          const reason = (isFreshSignal && oldW <= 1e-9) ? 'QUALIFIED_UPGRADE' : (w <= 1e-9 ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
+          orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
         }
+        if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
       }
     }
 
-    // --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。
-    // 不管是今天新進場還是本來就持有、繼續留著的部位，都用今天的新權重算這段——
-    // 這樣同一檔股票如果因為新部位加入被稀釋，稀釋前(隔夜段)已經用舊權重算過的
-    // 報酬不會被追溯打折，稀釋只影響稀釋之後(盤中段)這一段。當天出場的部位已經
-    // 從holdings移除，不會有盤中段(對照同事版本的既有簡化)。個股歸因表顯示的是
-    // 盤中段，隔夜段只計入當日總報酬、不拆分到個股(維持既有UI簡化)。---
+    // --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。今天出場
+    // 或被擠出的部位權重已經是0，不會有盤中段貢獻(對照同事版本的既有簡化)。---
     let intradayRet = 0;
     const attribution = [];
-    for (const [t, h] of holdings) {
-      const isEntryDay = h.entryIdx === i;
+    for (const [t, w] of weightNow) {
+      const a = active.get(t);
+      const isEntryDay = a ? a.entryIdx === i : false;
       const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
       const priceEnd = priceArr ? priceArr[i] : null;
       const priceStart = openArr ? openArr[i] : null;
       const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
-      if (r != null) intradayRet += h.weight * r;
-      attribution.push({ ticker: t, weight: h.weight, priceStart, priceEnd, ret: r, contribution: r != null ? h.weight * r : null, target: h.target, isEntryDay });
+      if (r != null) intradayRet += w * r;
+      attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, isEntryDay });
     }
     const dailyRet = overnightRet + intradayRet;
     const taiexRet = TAIEX_RET[i] != null ? TAIEX_RET[i] : 0;
 
     rows.push({
       idx: i, date: day,
-      holdings: [...holdings.entries()].map(([t, h]) => ({ ticker: t, weight: h.weight, target: h.target })),
+      holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
       attribution,
-      nPositions: holdings.size,
+      nPositions: weightNow.size,
       dailyReturn: dailyRet, taiexReturn: taiexRet,
       buys: buysToday, sells: sellsToday,
       sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,

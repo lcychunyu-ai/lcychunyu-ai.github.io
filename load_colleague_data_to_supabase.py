@@ -27,7 +27,7 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "resolution=merge-duplicates,return=minimal",
 }
-SQLITE_PATH = "/Users/USER/Desktop/Matthias Agent/factset/data/factset.sqlite"
+SQLITE_PATH = "/Users/USER/Desktop/Matthias Agent/FactSet交接包_2026-07-28/data/factset.sqlite"
 
 
 def upsert_batch(table, rows, on_conflict, batch_size=3000):

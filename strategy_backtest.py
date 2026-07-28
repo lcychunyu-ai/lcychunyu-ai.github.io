@@ -177,6 +177,22 @@ def _attach_enhanced_factors(ev: pd.DataFrame, events_full: pd.DataFrame, stock_
     all_ev["publish_ts"] = pd.to_datetime(
         all_ev["date"].dt.strftime("%Y-%m-%d") + " " + all_ev["news_time_taipei"].fillna("00:00:00")
     )
+
+    # 2026-07-28修正：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行
+    # 時間窗口如果有兩篇以上獨立新聞(例如鉅亨網同一次調升重複發了兩天，各自都通過他資料庫
+    # 自己的查重判定、不算彼此重複)，同事的引擎會先去重成「只留發布時間最晚的那篇」，
+    # 之後才拿這份已去重的新聞流去算abnormal_revision/recent_upgrades_60這些歷史因子。
+    # 我們原本是拿「還沒去重的原始新聞流」去算，導致被丟棄的那篇重複新聞還是被算進了
+    # 「過去調升次數」的歷史統計裡，把recent_upgrades_60灌水——早期(2023)資料量少時，
+    # 一篇灌水的影響被放大，這正是訓練期超額報酬比同事官方數字低一大截的根因。改成
+    # 先按(ticker,execute_date)去重(發布時間最晚者留下)，再用這份跟同事口徑一致的乾淨
+    # 新聞流去算歷史因子。
+    all_ev["execute_date"] = all_ev.apply(
+        lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1
+    )
+    all_ev = all_ev.dropna(subset=["execute_date"])
+    all_ev = all_ev.sort_values("publish_ts")
+    all_ev = all_ev[~all_ev.duplicated(subset=["ticker", "execute_date"], keep="last")]
     all_ev = all_ev.sort_values("publish_ts").reset_index(drop=True)
 
     entry_date_by_key = dict(zip(zip(ev["ticker"], ev["date"]), ev["entry_date"]))
@@ -407,15 +423,21 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
 
     taiex_ret = taiex.pct_change()
 
-    holdings: dict[str, dict] = {}  # ticker -> {weight, entry_date, entry_price}
+    # 2026-07-28重寫：對照同事backtest.js的active/weights雙軌設計。原本「排名被擠出」直接
+    # 把股票從holdings刪掉，之後要再進場一定得等一則全新的新聞訊號——但同事的引擎不是這樣：
+    # 「排名被擠出」只是那天權重被壓到0(active裡的資格保留)，不是真的離開。只有真正達目標價/
+    # 調降/超過最長持有天數，才會把它從active名單踢出。這代表一檔被擠出的股票，隔幾天如果
+    # 競爭對手自己出場、名額空出來，同事的引擎會讓它「不需要任何新新聞」就自動用原本(可能已經
+    # 是好幾天前)的舊分數重新拿回權重。這是造成訓練期(早期資料筆數少、名額競爭常態性地緊繃)
+    # 落差的第二個根因——active(資格池)跟weight_now(今天實際權重)拆成兩個獨立狀態才對得起來。
+    active: dict[str, dict] = {}       # ticker -> {entry_idx, target, score}：資格池，只有真出場才刪除
+    weight_now: dict[str, float] = {}  # ticker -> 今天實際權重，只放weight>0的
+    trade_entry: dict[str, dict] = {}  # ticker -> {entry_date, entry_price}：這次active任期內第一次拿到權重時鎖定，用來組round-trip trades
     rows = []
     trades = []
-    # 2026-07-28新增：orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要
-    # 權重有變動(進場/出場/既有持股單純被重新配置到新權重)都各記一筆BUY/SELL，不是只記
-    # 「進場到出場」這種round-trip摘要(trades沿用舊格式，win_rate/payoff_ratio還是靠它算)。
-    # 既有持股「只改權重、不出場」這個動作原本完全沒被記錄，等於報酬計算已經假設你每天
-    # 真的有下單調整部位，交易紀錄卻假裝沒發生過——這裡補上讓兩份紀錄口徑一致，也讓我們
-    # 的交易數第一次能跟同事的tradeCount直接比。
+    # orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要權重有變動(進場/
+    # 出場/被擠出/重新配置)都各記一筆BUY/SELL，不是只記「進場到出場」這種round-trip摘要
+    # (trades沿用舊格式，win_rate/payoff_ratio還是靠它算)。
     orders = []
 
     entries_by_date = cands_all.groupby("entry_date")
@@ -423,139 +445,106 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
     for day_idx, day in enumerate(period_cal):
         prev_day = period_cal[day_idx - 1] if day_idx > 0 else None
 
-        # --- 隔夜段報酬：用「今天開盤前就已經持有」的部位、當時(昨天收盤後)的權重，
-        # 算「昨收→今開」這段報酬。今天才進場的部位還沒經歷這段，不計入。這段要在
-        # 出場/重新配置動作之前算，因為用的是「重新配置前」的舊權重。---
+        # --- 隔夜段報酬：用「今天開盤前實際持有」的部位、當時(昨天收盤後)的權重，
+        # 算「昨收→今開」這段報酬。這段要在出場/重新配置動作之前算，因為用的是
+        # 「重新配置前」的舊權重。---
         overnight_ret = 0.0
         if prev_day is not None:
-            for t, h in holdings.items():
+            for t, w in weight_now.items():
                 open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
                 prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan)
                 if not np.isnan(open_now) and not np.isnan(prior_close) and prior_close != 0:
-                    overnight_ret += h["weight"] * (open_now / prior_close - 1)
+                    overnight_ret += w * (open_now / prior_close - 1)
 
-        # --- 出場檢查：達目標價用「前一天收盤價」判斷(對照今天開盤前就該知道的資訊，
-        # 不能用今天收盤價，那是還沒發生的事、會有前視偏誤)；調降訊號用「今天」是否
-        # 生效判斷；持有天數用交易日數(不是自然日數)，跟同事版本一致改用>=判斷。---
+        # --- 真出場檢查(對active資格池、不是只看今天有沒有權重)：達目標價用「前一天收盤價」
+        # 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；調降訊號用
+        # 「今天」是否生效判斷；持有天數用交易日數，從active設定的entry_idx算起。---
         down_today = down_lookup(day)
         exited = []
-        for t, h in holdings.items():
-            days_held = day_idx - h["entry_idx"]
+        for t, a in active.items():
+            days_held = day_idx - a["entry_idx"]
             prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan) if prev_day is not None else np.nan
             reason = None
             if t in down_today:
                 reason = "調降出場"
-            elif not np.isnan(prior_close) and prior_close >= h["target"]:
+            elif not np.isnan(prior_close) and prior_close >= a["target"]:
                 reason = "達目標價出場"
             elif days_held >= p.max_hold_days:
                 reason = "超過最長持有天數"
             if reason:
                 exited.append((t, reason))
         for t, reason in exited:
-            h = holdings.pop(t)
+            active.pop(t)
             exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-            trades.append({
-                "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                "entry_price": h["entry_price"], "exit_price": exit_price,
-                "reason": reason,
-            })
-            orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
-                            "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": reason})
+            old_w = weight_now.pop(t, 0.0)
+            if t in trade_entry:
+                te = trade_entry.pop(t)
+                trades.append({
+                    "ticker": t, "entry_date": te["entry_date"], "exit_date": day,
+                    "entry_price": te["entry_price"], "exit_price": exit_price,
+                    "reason": reason,
+                })
+            if old_w > 1e-9:
+                orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": old_w,
+                                "weight_after": 0.0, "weight_change": -old_w, "price": exit_price, "reason": reason})
 
-        # --- 新進場候選(含「已持有但又有新訊號」的股票——這種要當成重新進場處理：
-        # 更新目標價、重新起算持有天數，不能拿舊的、過時的目標價繼續判斷出場) ---
+        # --- 新訊號：更新/加入active資格池，重設entry_idx跟目標價，不管這檔股票今天在不在
+        # active裡都要覆蓋——新訊號代表重新起算持有天數，不能拿舊訊號殘留的資訊繼續判斷。---
         new_rows_by_ticker = {}
         if day in entries_by_date.groups:
             todays = entries_by_date.get_group(day)
             if len(todays) > 0:
                 scores = score_candidates(todays, p, stock_price, calendar)
                 scores.index = todays["ticker"].values
-                # 同一天同一ticker可能有多筆(不同訊號日剛好映射到同一個進場日)，
-                # 分數取最後一筆、進場價/目標價取第一筆出現的，跟combined_scores原本的
-                # keep="last"對照JS版firstRowByTicker的慣例一致。
                 scores = scores[~scores.index.duplicated(keep="last")]
                 for t in scores.index:
                     new_rows_by_ticker[t] = (todays[todays["ticker"] == t].iloc[0], scores[t])
+        for t, (row, s) in new_rows_by_ticker.items():
+            active[t] = {"entry_idx": day_idx, "target": row["new_target"], "score": s, "entry_price_today": row["entry_price_used"]}
 
-        # --- 每天都對「目前整個帳本(舊部位+今天新候選)」重新正規化權重 ---
-        # 固定資本每日平帳：不管前一天賺賠，隔天開盤前都會把整個投組還原回固定本金重新部署，
-        # 所以權重不能只更新「今天有變動的那一小部分」，要整批一起重算，總曝險才會真的
-        # 每天都保證不超過max_portfolio_exposure，不會有舊部位權重被放著不動、跟新配置疊加
-        # 導致總曝險偷偷超過100%的問題。
-        if holdings or new_rows_by_ticker:
-            score_map = {t: h["score"] for t, h in holdings.items()}
-            score_map.update({t: s for t, (_, s) in new_rows_by_ticker.items()})
-            combined_scores = pd.Series(score_map)
+        # --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
+        # 固定資本每日平帳：總曝險才會真的每天都保證不超過max_portfolio_exposure。今天沒被
+        # 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
+        # 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。---
+        if active:
+            combined_scores = pd.Series({t: a["score"] for t, a in active.items()})
             new_weights = allocate_weights(combined_scores, p)
-
-            for t, (row, s) in new_rows_by_ticker.items():
-                if t in new_weights.index and new_weights[t] > 0:
-                    holdings[t] = {
-                        "weight": new_weights[t], "entry_date": day, "entry_idx": day_idx,
-                        "entry_price": row["entry_price_used"], "target": row["new_target"], "score": s,
-                    }
-                    orders.append({"date": day, "ticker": t, "side": "BUY", "weight_before": 0.0,
-                                    "weight_after": new_weights[t], "weight_change": new_weights[t],
-                                    "price": row["entry_price_used"], "reason": "QUALIFIED_UPGRADE"})
-                elif t in holdings:
-                    # 已持有的股票這次雖然又有新訊號，但新分數沒擠進名額——原本的邏輯
-                    # 縫隙是這裡什麼都不做，導致舊權重留著沒被清掉，總曝險偷偷超過100%。
-                    # 這裡要跟一般被擠出排名一樣處理：出場。
-                    h = holdings.pop(t)
-                    exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-                    trades.append({
-                        "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                        "entry_price": h["entry_price"], "exit_price": exit_price,
-                        "reason": "排名被擠出",
-                    })
-                    orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
-                                    "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": "RANKED_OUT"})
-            for t in list(holdings.keys()):
-                if t in new_rows_by_ticker:
-                    continue  # 剛加入/已處理過的在上面設好權重或出場了
-                if t in new_weights.index and new_weights[t] > 0:
-                    # 2026-07-28新增：既有持股「維持在名單內、但權重被重新配置」也是真實下單
-                    # 行為——隔夜漲跌讓部位偏離目標權重，開盤前本來就要買賣調整回新權重，不是
-                    # bookkeeping假動作。之前這裡完全沒記錄，等於報酬計算已經假設你下了這筆單，
-                    # 交易紀錄卻沒承認它發生過。
-                    before = holdings[t]["weight"]
-                    holdings[t]["weight"] = new_weights[t]
-                    delta = new_weights[t] - before
-                    if abs(delta) > 1e-9:
-                        open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-                        orders.append({"date": day, "ticker": t, "side": "BUY" if delta > 0 else "SELL",
-                                        "weight_before": before, "weight_after": new_weights[t],
-                                        "weight_change": delta, "price": open_now, "reason": "SIGNAL_REBALANCE"})
+            for t, a in active.items():
+                w = float(new_weights.get(t, 0.0))
+                old_w = weight_now.get(t, 0.0)
+                is_fresh_signal = t in new_rows_by_ticker
+                if w > 1e-9 and t not in trade_entry:
+                    entry_price = a.get("entry_price_today") if is_fresh_signal else (
+                        stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan)
+                    trade_entry[t] = {"entry_date": day, "entry_price": entry_price}
+                delta = w - old_w
+                if abs(delta) > 1e-9:
+                    price_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+                    reason = "QUALIFIED_UPGRADE" if (is_fresh_signal and old_w <= 1e-9) else ("RANKED_OUT" if w <= 1e-9 else "SIGNAL_REBALANCE")
+                    orders.append({"date": day, "ticker": t, "side": "BUY" if delta > 0 else "SELL",
+                                    "weight_before": old_w, "weight_after": w, "weight_change": delta,
+                                    "price": price_now, "reason": reason})
+                if w > 1e-9:
+                    weight_now[t] = w
                 else:
-                    h = holdings.pop(t)
-                    exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-                    trades.append({
-                        "ticker": t, "entry_date": h["entry_date"], "exit_date": day,
-                        "entry_price": h["entry_price"], "exit_price": exit_price,
-                        "reason": "排名被擠出",
-                    })
-                    orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": h["weight"],
-                                    "weight_after": 0.0, "weight_change": -h["weight"], "price": exit_price, "reason": "RANKED_OUT"})
+                    weight_now.pop(t, None)
 
-        # --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。
-        # 不管是今天新進場還是本來就持有、繼續留著的部位，都用今天的新權重算這段
-        # ——這樣同一檔股票如果因為新部位加入被稀釋，稀釋前(隔夜段)已經用舊權重
-        # 算過的報酬不會被追溯打折，稀釋只影響稀釋之後(盤中段)這一段。當天出場的
-        # 部位已經從holdings移除，不會有盤中段(對照同事版本的既有簡化)。---
+        # --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。今天出場
+        # 或被擠出的部位權重已經是0，不會有盤中段貢獻(對照同事版本的既有簡化)。---
         intraday_ret = 0.0
-        for t, h in holdings.items():
+        for t, w in weight_now.items():
             close_now = stock_price.get(t, pd.Series(dtype=float)).get(day, np.nan)
             open_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
             if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
-                intraday_ret += h["weight"] * (close_now / open_now - 1)
+                intraday_ret += w * (close_now / open_now - 1)
 
         daily_ret = overnight_ret + intraday_ret
 
         rows.append({
             "date": day,
-            "holdings": ",".join(holdings.keys()),
-            "n_positions": len(holdings),
-            "exposure": sum(h["weight"] for h in holdings.values()),
+            "holdings": ",".join(weight_now.keys()),
+            "n_positions": len(weight_now),
+            "exposure": sum(weight_now.values()),
             "daily_return": daily_ret,
             "taiex_return": taiex_ret.get(day, np.nan),
         })

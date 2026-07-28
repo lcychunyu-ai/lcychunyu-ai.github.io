@@ -17,6 +17,7 @@ mtd_ccc_backtest.py
 
 # 同事的獨立專案(Node.js+SQLite，拿來對照方法論用，不是我們的原始碼，不進版控)
 factset/
+FactSet交接包_2026-07-28/
 
 # factset_data/ 全部是可重新產生的資料產出(JSON/CSV/xlsx/HTML快照)，不進版控
 factset_data/*
