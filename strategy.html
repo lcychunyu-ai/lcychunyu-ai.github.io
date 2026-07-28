@@ -464,6 +464,24 @@ let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [
 let TAIEX_RET = [];
 let EV_UP = [], DOWN_BY_DATE = new Map();
 let RAW_UP_COUNT = 0;
+// 2026-07-28新增：每檔股票自己的、依日期排序、沒有NaN空缺的原始收盤價序列(不對齊大盤
+// 交易日曆)，只給動能/波動率回看窗口用，Map<ticker, {dates:[...], closes:[...]}>。
+let PRICES_RAW = new Map();
+
+// 每檔股票各自往前找「執行日之前最近n個有效收盤價」，不受大盤交易日曆限制——對照同事
+// backtest.js的priorSeries()。dates/closes依日期字串(YYYY-MM-DD)排序，字串比較順序
+// 跟日期先後順序一致，可以直接用來二分搜尋。
+function rawPriorWindow(ticker, beforeDateStr, n) {
+  const series = PRICES_RAW.get(ticker);
+  if (!series || series.dates.length === 0) return [];
+  const dates = series.dates, closes = series.closes;
+  let lo = 0, hi = dates.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] < beforeDateStr) lo = mid + 1; else hi = mid;
+  }
+  return closes.slice(Math.max(0, lo - n), lo);
+}
 
 function bisectRight(arr, x) {
   let lo = 0, hi = arr.length;
@@ -628,9 +646,15 @@ function prepareEvents(events) {
 
     // enhanced配置公式(對照同事版本)要用的動能/波動率：進場前21個價格點(20個報酬)，
     // 頭尾比當動能，相對加權指數算相對動能，同一段期間的日報酬年化標準差當波動率。
+    // 2026-07-28修正：對照同事backtest.js的priorSeries()——回看窗口是「這檔股票自己的
+    // 價格紀錄裡，執行日之前最近21個有效收盤價」，不受大盤交易日曆限制。個股偶爾會有
+    // 大盤加權指數當天沒有報價、但個股自己有報價的日子，這種日子如果用「對齊大盤日曆的
+    // PRICES陣列」去切窗口，會被整筆跳過，回看窗口因此少算一天、往前多推一天，動能/
+    // 波動率算出來就會跟同事版本對不上。改用rawPriorWindow()——每檔股票自己排序、
+    // 沒有NaN空缺的原始序列，不受大盤日曆限制。
     let momentum20 = 0, relativeMomentum20 = 0, volatility20 = 0.35;
     const windowStart = Math.max(0, entryIdx - 21);
-    const priceWindow = priceArr.slice(windowStart, entryIdx).filter(v => v != null);
+    const priceWindow = rawPriorWindow(e.ticker, DATES[entryIdx], 21);
     const taiexWindow = TAIEX.slice(windowStart, entryIdx).filter(v => v != null);
     if (priceWindow.length > 1) {
       momentum20 = priceWindow[priceWindow.length - 1] / priceWindow[0] - 1;
@@ -698,6 +722,21 @@ async function loadAll() {
   TAIEX_RET = new Array(TAIEX.length).fill(null);
   for (let i = 1; i < TAIEX.length; i++) {
     if (TAIEX[i] != null && TAIEX[i - 1] != null && TAIEX[i - 1] !== 0) TAIEX_RET[i] = (TAIEX[i] - TAIEX[i - 1]) / TAIEX[i - 1];
+  }
+
+  // 2026-07-28新增：直接查colleague_stock_prices原始表，不透過get_colleague_price_bundle()
+  // 這種「先跟大盤交易日曆對齊、對不上的日期直接丟掉」的RPC，動能/波動率回看窗口才能
+  // 正確涵蓋個股自己獨有(大盤那天剛好沒報價)的交易日。
+  const rawPriceRows = await sbFetchAll('colleague_stock_prices', {
+    select: 'ticker,trade_date,close', order: 'ticker.asc,trade_date.asc',
+  });
+  PRICES_RAW = new Map();
+  for (const row of rawPriceRows) {
+    if (row.close == null) continue;
+    if (!PRICES_RAW.has(row.ticker)) PRICES_RAW.set(row.ticker, { dates: [], closes: [] });
+    const s = PRICES_RAW.get(row.ticker);
+    s.dates.push(row.trade_date);
+    s.closes.push(row.close);
   }
 
   EV_UP = prepareEvents(events);
