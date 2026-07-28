@@ -106,7 +106,13 @@
   .param-field .hint { font-size: 10.5px; color: var(--ink-faint); margin-top: 3px; }
   .param-field input[type="number"], .param-field input[type="date"], .param-field select, .param-field input[type="text"] {
     width: 100%; font-size: 13px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 7px 9px;
+    border-radius: 8px; padding: 7px 9px; transition: border-color .12s ease;
+  }
+  .param-field input:focus, .param-field select:focus { outline: none; border-color: var(--accent); }
+  .param-field select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2396938a' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; cursor: pointer;
   }
   .input-suffix { position: relative; }
   .input-suffix input { padding-right: 40px !important; }
@@ -115,10 +121,16 @@
     font-size: 10.5px; color: var(--ink-faint); font-weight: 600; pointer-events: none;
   }
   .param-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .param-field.checkbox { display: flex; align-items: center; gap: 8px; }
-  .param-field.checkbox label { margin: 0; }
-  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; margin: 0 0 12px; }
-  legend { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 6px; }
+  .param-field.checkbox {
+    display: flex; align-items: center; gap: 9px; padding: 8px 10px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+  }
+  .param-field.checkbox label { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--ink); cursor: pointer; }
+  .param-field.checkbox input[type="checkbox"] {
+    width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
+  }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px 6px; margin: 0 0 14px; }
+  legend { font-size: 10.5px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 6px; }
 
   .btn {
     font-size: 13.5px; font-weight: 700; color: var(--bg); background: var(--ink);
@@ -278,81 +290,91 @@
         <div class="eyebrow-row"><div class="step-num">01</div><span class="eyebrow">Strategy Inputs</span></div>
         <div class="block-title">回測參數</div>
 
-        <div class="param-row2">
-          <div class="param-field"><label>開始日期</label><input type="date" id="p-start" value="2023-01-01"/></div>
-          <div class="param-field"><label>結束日期</label><input type="date" id="p-end" value="2026-12-31"/></div>
-        </div>
-
-        <div class="param-row2">
-          <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="3" step="0.5"/><span class="suffix">%</span></div></div>
-          <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="3" step="1"/><span class="suffix">位</span></div></div>
-        </div>
-
-        <div class="param-row2">
-          <div class="param-field"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="5" step="1"/><span class="suffix">%</span></div></div>
-          <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5"/><span class="suffix">%</span></div></div>
-        </div>
-
-        <div class="param-row2">
-          <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="20" step="5"/><span class="suffix">交易日</span></div></div>
-          <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="0" step="1"/><span class="suffix">0=不限</span></div></div>
-        </div>
-
-        <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5"/><span class="suffix">%</span></div></div>
-
-        <div class="param-field">
-          <label>配置方式</label>
-          <select id="p-sizing">
-            <option value="equal">等權</option>
-            <option value="by_upgrade">調升幅度加權</option>
-            <option value="composite">原始綜合分數</option>
-            <option value="multifactor">第二代多因子</option>
-            <option value="enhanced" selected>Enhanced（同事版本公式）</option>
-          </select>
-        </div>
-
-        <details class="explainer-toggle">
-          <summary>配置方式怎麼計算？</summary>
-          <div class="explainer" style="margin-top:10px;">
-            <p><b>等權</b></p>
-            <span class="formula">每檔權重 = 1 ÷ 符合條件的股票數</span>
-            <p><b>調升幅度加權</b></p>
-            <span class="formula">權重 ∝ 本次目標價調升%</span>
-            <p><b>原始綜合分數</b></p>
-            <span class="formula">分數 = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
-            <p style="margin:6px 0 0; font-size:11px;">分數除以總分得到權重，再套用單檔上限與最大持股數。∝ 表示按比例分配。</p>
-            <p style="margin-top:8px;"><b>第二代多因子</b></p>
-            <span class="formula" style="margin-bottom:0;">分數 = 異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
-            <p style="margin:6px 0 0; font-size:11px;">異常調升：本次調升幅度相對該股歷史平均的標準化程度；相對動能：進場前20個交易日報酬，跟同一批候選的中位數比；波動率：同一段期間的日報酬標準差，缺值用同批中位數補。</p>
-            <p style="margin-top:8px;"><b>Enhanced</b></p>
-            <span class="formula" style="margin-bottom:0;">分數 = 異常調升(clip 0.25~4) × log(1+分析師) × 上漲空間(clip 1%~60%) × 相對大盤動能(clip 0.25~2) × 連續調升加成 ÷ 年化波動率(下限10%)</span>
-            <p style="margin:6px 0 0; font-size:11px;">異常調升：相對該股過去365天調升幅度中位數；相對動能：進場前20個交易日報酬，跟加權指數同期比較（不是跟同批候選比）；連續調升：過去60天內調升次數；波動率：年化。</p>
-          </div>
-        </details>
-
-        <div id="composite-params" style="display:none;">
+        <fieldset>
+          <legend>回測期間</legend>
           <div class="param-row2">
-            <div class="param-field"><label>α 調升幅度</label><input type="number" id="p-alpha" value="1.0" step="0.1"/></div>
-            <div class="param-field"><label>β 分析師數</label><input type="number" id="p-beta" value="0.5" step="0.1"/></div>
+            <div class="param-field"><label>開始日期</label><input type="date" id="p-start" value="2023-01-01"/></div>
+            <div class="param-field" style="margin-bottom:0;"><label>結束日期</label><input type="date" id="p-end" value="2026-12-31"/></div>
           </div>
-          <div class="param-field"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
-        </div>
+        </fieldset>
 
-        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:0 0 14px;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
+        <fieldset>
+          <legend>訊號篩選門檻</legend>
+          <div class="param-row2">
+            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="3" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="3" step="1" min="0"/><span class="suffix">位</span></div></div>
+          </div>
+          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="5" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
+          <p class="hint" style="margin:8px 0 0;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
+        </fieldset>
 
-        <div class="param-field">
-          <label>歷史平均加碼規則</label>
-          <select id="p-avgRule">
-            <option value="none">不使用</option>
-            <option value="tier3">高於平均加碼 / 低於平均維持</option>
-          </select>
-        </div>
-        <div class="param-field"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1"/></div>
+        <fieldset>
+          <legend>配置與風控</legend>
+          <div class="param-row2">
+            <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
+          </div>
+          <div class="param-row2">
+            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="20" step="5" min="0"/><span class="suffix">交易日</span></div></div>
+            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="0" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
+          </div>
 
-        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:0 0 14px;">成交價格：固定用下一交易日開盤價進場，收盤後依固定資本做多退少補的重新平衡；不分新聞公布時間點。</p>
+          <div class="param-field" style="margin-bottom:0;">
+            <label>配置方式</label>
+            <select id="p-sizing">
+              <option value="enhanced" selected>進階多因子（推薦，含動能與波動率調整）</option>
+              <option value="multifactor">多因子（不含大盤相對動能）</option>
+              <option value="composite">綜合分數（調升幅度／分析師數／上漲空間加權）</option>
+              <option value="by_upgrade">調升幅度加權</option>
+              <option value="equal">等權</option>
+            </select>
+          </div>
 
-        <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>目標價調降時賣出</label></div>
-        <div class="param-field checkbox" style="margin-bottom:16px;"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時賣出</label></div>
+          <details class="explainer-toggle" open>
+            <summary>配置方式怎麼計算？</summary>
+            <div class="explainer" style="margin-top:10px;">
+              <p><b>進階多因子（推薦）</b></p>
+              <span class="formula" style="margin-bottom:0;">分數 = 異常調升(clip 0.25~4) × log(1+分析師) × 上漲空間(clip 1%~60%) × 相對大盤動能(clip 0.25~2) × 連續調升加成 ÷ 年化波動率(下限10%)</span>
+              <p style="margin:6px 0 0; font-size:11px;">異常調升：相對該股過去365天調升幅度中位數；相對動能：進場前20個交易日報酬，跟加權指數同期比較（不是跟同批候選比）；連續調升：過去60天內調升次數；波動率：年化。</p>
+              <p style="margin-top:8px;"><b>多因子</b></p>
+              <span class="formula" style="margin-bottom:0;">分數 = 異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
+              <p style="margin:6px 0 0; font-size:11px;">異常調升：本次調升幅度相對該股歷史平均的標準化程度；相對動能：進場前20個交易日報酬，跟同一批候選的中位數比；波動率：同一段期間的日報酬標準差，缺值用同批中位數補。</p>
+              <p style="margin-top:8px;"><b>綜合分數</b></p>
+              <span class="formula">分數 = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
+              <p style="margin:6px 0 0; font-size:11px;">分數除以總分得到權重，再套用單檔上限與最大持股數。</p>
+              <p><b>調升幅度加權</b></p>
+              <span class="formula">權重 ∝ 本次目標價調升%</span>
+              <p><b>等權</b></p>
+              <span class="formula" style="margin-bottom:0;">每檔權重 = 1 ÷ 符合條件的股票數</span>
+            </div>
+          </details>
+
+          <div id="composite-params" style="display:none; margin-top:12px;">
+            <div class="param-row2">
+              <div class="param-field"><label>α 調升幅度</label><input type="number" id="p-alpha" value="1.0" step="0.1"/></div>
+              <div class="param-field"><label>β 分析師數</label><input type="number" id="p-beta" value="0.5" step="0.1"/></div>
+            </div>
+            <div class="param-field" style="margin-bottom:0;"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>加碼規則</legend>
+          <div class="param-field"><label>歷史平均加碼規則</label>
+            <select id="p-avgRule">
+              <option value="none">不使用</option>
+              <option value="tier3">高於平均加碼 / 低於平均維持</option>
+            </select>
+          </div>
+          <div class="param-field" style="margin-bottom:0;"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1" min="1"/></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>出場規則</legend>
+          <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>目標價調降時賣出</label></div>
+          <div class="param-field checkbox" style="margin-bottom:0;"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時賣出</label></div>
+          <p class="hint" style="margin:8px 0 0;">成交價格：固定用下一交易日開盤價進場，收盤後依固定資本做多退少補的重新平衡；不分新聞公布時間點。</p>
+        </fieldset>
 
         <button class="btn block" id="run-btn"><span>▶</span>執行回測</button>
 
@@ -1240,7 +1262,7 @@ document.getElementById('p-sizing').addEventListener('change', (e) => {
 
 const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
 const fmtNum2 = (v, digits = 2) => v == null ? '—' : v.toFixed(digits);
-const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', composite: '原始綜合分數', multifactor: '第二代多因子', enhanced: 'Enhanced' };
+const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', composite: '綜合分數', multifactor: '多因子', enhanced: '進階多因子' };
 
 // ============================================================================
 // 上方摘要卡片 / 資料涵蓋度
