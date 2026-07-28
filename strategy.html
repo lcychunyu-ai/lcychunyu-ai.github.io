@@ -1290,9 +1290,12 @@ function hideTip() { tooltipEl.style.display = 'none'; }
 // ============================================================================
 let CURRENT_ROWS = [];
 
+// 2026-07-28修正：對照同事public/strategy.js的renderMorning()，整股換算是floor(權重×資金
+// ÷股價)算到單股，不是先除以1000取整張(1000股)再乘回去——同一筆資金拿去比對，兩邊算出來
+// 的股數會不一樣。改成跟他一致的單股捨去，不做1000股取整。
 function lotsFor(weight, capital, price) {
   if (price == null || price <= 0) return null;
-  return Math.floor((weight * capital) / price / 1000) * 1000;
+  return Math.floor((weight * capital) / price);
 }
 
 function buildDailyExplanation(r, prevRow) {
@@ -1385,9 +1388,9 @@ function renderLedgerDetail() {
       <div class="brief-eyebrow">Trader Opening Brief</div>
       <h4>當日開盤操作清單</h4>
       <div class="brief-line">${r.date}：訊號公布後於下一交易日開盤價執行。</div>
-      <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「張數」欄位依當日收盤價換算整股（1張=1,000股，無條件捨去）。</div>
+      <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「股數」欄位依當日收盤價換算單股（無條件捨去，不取整張）。</div>
       ${r.buys.length === 0 && r.sells.length === 0 ? '<div class="brief-line">今日無再平衡交易。</div>' : ''}
-      <div class="brief-formula">整股換算：張數 = floor(目標權重 × 執行資金 ÷ 當日收盤價 ÷ 1000) × 1000。每日報酬拆成隔夜段(用前一天收盤到當天開盤，套用前一天收盤時的舊權重)+盤中段(用當天開盤到收盤，套用重新配置後的新權重)兩段加總；進場當天沒有隔夜段，出場當天沒有盤中段。</div>
+      <div class="brief-formula">整股換算：股數 = floor(目標權重 × 執行資金 ÷ 當日收盤價)，算到單股，不取整張(1張=1,000股)。每日報酬拆成隔夜段(用前一天收盤到當天開盤，套用前一天收盤時的舊權重)+盤中段(用當天開盤到收盤，套用重新配置後的新權重)兩段加總；進場當天沒有隔夜段，出場當天沒有盤中段。</div>
     </div>
 
     <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
@@ -1406,7 +1409,7 @@ function renderLedgerDetail() {
     <div class="two-col-tables">
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>張數</th></tr></thead>
+          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>股數</th></tr></thead>
           <tbody>${holdingsRows || '<tr><td colspan="6" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
         </table>
       </div>
