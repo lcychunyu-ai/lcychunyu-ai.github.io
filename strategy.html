@@ -1222,9 +1222,25 @@ const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', comp
 // 上方摘要卡片 / 資料涵蓋度
 // ============================================================================
 
-function renderCards(summary, bestExcessInfo) {
+function renderCards(summary, bestExcessInfo, rows) {
   const container = document.getElementById('card-row-holder');
   if (!summary) { container.innerHTML = '<div class="empty-state" style="padding:30px;">這段區間沒有符合條件的交易，無法產生結果。</div>'; return; }
+
+  // 2026-07-28新增：策略是每日固定資本平帳(獲利/虧損當天結清，不滾入隔天本金)，跟同事
+  // backtest.js的stats()一樣，拿「大盤每日報酬也用同一種不滾入本金的算術口徑」去比超額
+  // 報酬，是公平的蘋果比蘋果——這就是上面「台股加權指數」卡片的算法，不用改。
+  // 但市場上一般講「有沒有擊敗大盤」，指的通常是「複利買進持有」的真實報酬，這是另一個
+  // 問題(策略實際操作下的真金白銀 vs 單純買進持有不動的真金白銀)，同事的stats()也另外
+  // 算了一個benchmarkPriceReturn(真實指數點位漲幅，複利)供這個用途，我們CSV匯出本來就有
+  // 算(benchmarkPriceCumulative)，這裡額外拉出來獨立成一張卡片，不影響任何既有計算。
+  let buyHoldPct = null;
+  if (rows && rows.length && TAIEX[rows[0].idx] != null) {
+    const taiexBase = TAIEX[rows[0].idx];
+    const taiexEnd = TAIEX[rows[rows.length - 1].idx];
+    if (taiexEnd != null) buyHoldPct = (taiexEnd / taiexBase - 1) * 100;
+  }
+  const vsBuyHold = buyHoldPct != null ? summary.totalReturnPct - buyHoldPct : null;
+
   container.innerHTML = `
     <div class="card-row">
       <div class="stat-card">
@@ -1235,12 +1251,17 @@ function renderCards(summary, bestExcessInfo) {
       <div class="stat-card">
         <div class="label">台股加權指數</div>
         <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
-        <div class="sub">每日報酬相加 · 同一算術口徑</div>
+        <div class="sub">每日報酬相加 · 跟策略同一種「不滾入本金」算術口徑，公平比超額報酬用</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">大盤買進持有(真實複利)</div>
+        <div class="value">${buyHoldPct != null ? fmtPct(buyHoldPct) : '—'}</div>
+        <div class="sub">指數點位真實漲幅，複利。策略 vs 這個數字才是「有沒有擊敗單純買大盤放著不動」：${vsBuyHold != null ? fmtPct(vsBuyHold) : '—'}</div>
       </div>
       <div class="stat-card">
         <div class="label">目前參數超額報酬</div>
         <div class="value ${summary.excessReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div>
-        <div class="sub">策略 − 加權指數，左側面板目前這組參數</div>
+        <div class="sub">策略 − 加權指數(算術口徑)，左側面板目前這組參數</div>
       </div>
       <div class="stat-card">
         <div class="label">訓練期最佳參數超額報酬 <span class="pill-badge caution">實驗性，不建議直接採用</span></div>
@@ -1574,7 +1595,7 @@ function runAndRenderManual(bestExcessInfo) {
   const end = document.getElementById('p-end').value;
   const result = runBacktest(p, start, end);
   const { rows, summary } = result;
-  renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS);
+  renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS, rows);
   renderCoverage();
   renderCurve(rows);
   renderLedger(rows);
@@ -1817,7 +1838,7 @@ async function runStrictSearchAndRender() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS);
+  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS, CURRENT_ROWS);
   return { selected, testEnd, isOverfit };
 }
 
