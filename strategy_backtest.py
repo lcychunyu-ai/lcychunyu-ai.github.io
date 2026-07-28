@@ -120,7 +120,12 @@ def resolve_execution_date(d: pd.Timestamp, time_taipei, calendar: pd.DatetimeIn
 
 def prepare_events(events: pd.DataFrame, stock_price: dict, stock_price_open: dict, calendar: pd.DatetimeIndex, taiex: Optional[pd.Series] = None) -> pd.DataFrame:
     ev = events[events["direction"] == "UP"].copy()
-    ev = ev.sort_values(["ticker", "date"]).reset_index(drop=True)
+    # 2026-07-28修正：排序原本只用["ticker","date"]，同一天同一股票如果有兩篇以上獨立新聞
+    # (真實存在，例如2317在2024-03-15當天就有兩篇分析師數不同的報導)，"keep='last'"去重
+    # 挑到哪一筆會是undefined behavior(取決於資料庫回傳的任意順序)。改成排序時加入
+    # news_time_taipei當第三層鍵，"keep='last'"才會穩定挑到當天發布時間最晚的那篇，
+    # 跟同事backtest.js的latestByWindow(發布時間最晚者留下)語意一致。
+    ev = ev.sort_values(["ticker", "date", "news_time_taipei"]).reset_index(drop=True)
 
     # 執行日依09:00開盤時間窗口規則決定，不再固定用下一交易日。
     ev["entry_date"] = ev.apply(lambda r: resolve_execution_date(r["date"], r.get("news_time_taipei"), calendar), axis=1)
@@ -359,12 +364,18 @@ def _enhanced_score(cands: pd.DataFrame) -> pd.Series:
     risk=年化波動率(clip下限0.10，缺值預設0.35)
     score = surprise × analysts × upside × relativeMomentum × repeatBoost ÷ risk
     """
-    surprise = cands["abnormal_revision"].fillna(1.0).clip(lower=0.25, upper=4.0)
+    # 2026-07-28修正：對照同事backtest.js的`event.abnormalRevision||1`——JS的||對0是falsy，
+    # 這其實是他HANDOVER.md自己記錄的已知瑕疵(「abnormalRevision=0目前會因缺值保護被當成1」)，
+    # 但這是他小主管已經審過、寫進正式參數的行為，我們要複製這個瑕疵才能跟他的數字對上，
+    # 不能自己「修正」成更合理但跟他不一致的版本。abnormal_revision算出來剛好是0.0
+    # (revision本身是0，例如目標價沒變動但還是被算成一次調升事件)時，改成當作缺值處理，
+    # 不能只用fillna(NaN專用)、讓0繼續留著被clip到0.25——volatility_20同理保守處理。
+    surprise = cands["abnormal_revision"].mask(cands["abnormal_revision"] == 0).fillna(1.0).clip(lower=0.25, upper=4.0)
     analysts = np.log1p(cands["analyst_count"].clip(lower=1))
     upside = cands["upside_used"].clip(lower=0.01, upper=0.60)
     relative_momentum = (1.0 + cands["relative_momentum_20"].fillna(0.0)).clip(lower=0.25, upper=2.0)
     repeat_boost = 1.0 + 0.15 * (cands["recent_upgrades_60"].fillna(1.0) - 1).clip(lower=0)
-    risk = cands["volatility_20"].fillna(0.35).clip(lower=0.10)
+    risk = cands["volatility_20"].mask(cands["volatility_20"] == 0).fillna(0.35).clip(lower=0.10)
     return (surprise * analysts * upside * relative_momentum * repeat_boost / risk).clip(lower=0)
 
 

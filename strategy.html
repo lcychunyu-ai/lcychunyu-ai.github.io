@@ -563,9 +563,17 @@ function computeRevisionHistory(events) {
 // 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
 function prepareEvents(events) {
   const revisionHistory = computeRevisionHistory(events);
+  // 2026-07-28修正：排序原本只用ticker+date，同一天同一股票如果有兩篇以上獨立新聞(真實
+  // 存在，例如2317在2024-03-15當天就有兩篇分析師數不同的報導)，後面「同entryIdx keep last」
+  // 去重挑到哪一筆會是undefined behavior。加入news_time_taipei當第三層鍵，才會穩定挑到
+  // 當天發布時間最晚的那篇，跟同事backtest.js的latestByWindow語意一致。
   const up = events.filter(e => e.direction === 'UP')
     .slice()
-    .sort((a, b) => (a.ticker === b.ticker ? a.date.localeCompare(b.date) : a.ticker.localeCompare(b.ticker)));
+    .sort((a, b) => {
+      if (a.ticker !== b.ticker) return a.ticker.localeCompare(b.ticker);
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return (a.news_time_taipei || '').localeCompare(b.news_time_taipei || '');
+    });
   RAW_UP_COUNT = up.length;
   const histByTicker = new Map();
   const out = [];
@@ -684,7 +692,12 @@ function filterCandidates(cands, p) {
 
 // 直接對照同事backtest.js的signalScore()『enhanced』分支，逐項複製，不是重新設計。
 function scoreEnhanced(c) {
-  const surprise = Math.min(4, Math.max(0.25, c.abnormalRevision ?? 1));
+  // 2026-07-28修正：對照同事backtest.js的`event.abnormalRevision||1`，改用||不是??——JS的
+  // ||對0是falsy，這是他HANDOVER.md自己記錄的已知瑕疵(「abnormalRevision=0目前會因缺值
+  // 保護被當成1」)，但這是他小主管已經審過、寫進正式參數的行為，我們要複製這個瑕疵才能
+  // 跟他的數字對上，不能自己「修正」成更合理但跟他不一致的版本(原本用??會讓abnormalRevision
+  // 剛好是0.0的候選被clip到0.25，score比他低了4倍，足以讓候選排不進前5名)。
+  const surprise = Math.min(4, Math.max(0.25, c.abnormalRevision || 1));
   const analysts = Math.log1p(c.analystCount);
   const upside = Math.min(0.60, Math.max(0.01, c.upsideUsed));
   const relativeMomentum = Math.min(2, Math.max(0.25, 1 + (c.relativeMomentum20 || 0)));
