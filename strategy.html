@@ -484,6 +484,8 @@ let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [
 let TAIEX_RET = [];
 let EV_UP = [], DOWN_BY_DATE = new Map();
 let RAW_UP_COUNT = 0;
+let RAW_EVENTS = []; // 優化器算分段(訓練/驗證/測試)時要重建floorIdx版的EV_UP，見buildFoldEvUp()
+const FOLD_EV_UP_CACHE = new Map();
 // 2026-07-28新增：每檔股票自己的、依日期排序、沒有NaN空缺的原始收盤價序列(不對齊大盤
 // 交易日曆)，只給動能/波動率回看窗口用，Map<ticker, {dates:[...], closes:[...]}>。
 let PRICES_RAW = new Map();
@@ -566,8 +568,11 @@ function resolveExecutionIdx(dateStr, timeStr) {
 // 如果同一檔股票同一個執行窗口裡「先有一篇UP、後有一篇DOWN」，同事的引擎會讓時間較晚的
 // DOWN直接蓋掉UP(UP從未成為候選)，我們原本兩條資料流互不知情，UP還是會被當成候選處理，
 // 導致明明應該被蓋掉的進場訊號還是進了場。這裡在UP/DOWN分流之前，先合併去重一次。
-function dedupeByExecutionWindow(events) {
-  const withIdx = events.map(e => ({ ...e, _execIdx: resolveExecutionIdx(e.date, e.news_time_taipei) })).filter(e => e._execIdx != null);
+function dedupeByExecutionWindow(events, floorIdx) {
+  const withIdx = events.map(e => {
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    return idx == null ? null : { ...e, _execIdx: floorIdx != null ? Math.max(idx, floorIdx) : idx };
+  }).filter(e => e != null);
   const sorted = withIdx.slice().sort((a, b) => {
     const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
     const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
@@ -581,14 +586,27 @@ function dedupeByExecutionWindow(events) {
 // 異常調升/連續調升次數：對照同事backtest.js的makeEvents()，用「全部方向」(UP+DOWN)
 // 的歷史事件依發布時間排序算基準值——abnormalRevision(相對該股過去365天|調升幅度|
 // 中位數)、recentUpgrades60(過去60天內調升次數+1)。回傳Map，key='ticker|date'。
-function computeRevisionHistory(events) {
+function computeRevisionHistory(events, floorIdx) {
   // 2026-07-28修正：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行
   // 時間窗口如果有兩篇以上獨立新聞(各自都通過他資料庫自己的查重判定、不算彼此重複)，
   // 同事的引擎先去重成「只留發布時間最晚的那篇」，才拿這份已去重的新聞流去算歷史因子。
   // 原本這裡是拿還沒去重的原始新聞流去算，導致被丟棄的重複新聞還是被算進「過去調升次數」
   // 統計裡，把recentUpgrades60灌水；早期資料量少時這個灌水的影響被放大，是訓練期超額
   // 報酬比同事官方數字低一截的根因之一。
-  const withExecIdx = events.map(e => ({ ...e, _execIdx: resolveExecutionIdx(e.date, e.news_time_taipei) })).filter(e => e._execIdx != null);
+  //
+  // 2026-07-28再修正(floorIdx)：對照同事backtest.js的executionDateForPublishedAt()——
+  // 用二分搜尋在「歷史交易日曆」裡找執行日，這份曆表在他評估某一段訓練/驗證/測試期時
+  // 只回溯該段起始日往前140天(不是全部歷史，見optimizer.js的loadData())。文章發布時間
+  // 如果早於這個140天緩衝的第一天，二分搜尋會直接收斂到「曆表第一天」，不是被丟棄或
+  // 回傳null——這代表所有緩衝之前發布的舊文章，全部會被誤判成「跟緩衝第一天同一個執行
+  // 窗口」，彼此互相碰撞，同一檔股票只留「發布時間最晚」的一篇存活(用它真正的發布日期
+  // 進365天歷史基準的計算，不是曆表第一天)，其他更舊的全部被蓋掉消失。floorIdx就是
+  // 這裡用來重現這個「二分搜尋鎖底」行為的機制：任何解析出來的執行窗口index，只要小於
+  // floorIdx，一律鎖到floorIdx本身，讓這些舊文章互相碰撞、只留最晚發布的一篇。
+  const withExecIdx = events.map(e => {
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    return idx == null ? null : { ...e, _execIdx: floorIdx != null ? Math.max(idx, floorIdx) : idx };
+  }).filter(e => e != null);
   const sortedByPublish = withExecIdx.slice().sort((a, b) => {
     const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
     const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
@@ -632,24 +650,16 @@ function computeRevisionHistory(events) {
   return out;
 }
 
-// 2026-07-28查證：優化器分段(訓練2023-2024/驗證2025/測試2026)算出來的數字跟同事的對不
-// 上，根因是他optimizer.js的loadData()——股價/大盤資料只回溯段落起始日往前140天，這個
-// 140天限制透過「文章發布時間能不能對應到有效交易日曆」這一層，連帶讓異常調升需要的365天
-// 歷史基準也被截斷，即使他的文章查詢本身用了370天緩衝也沒用(執行日期解析在140天緩衝之外
-// 會直接失敗、整篇文章被丟掉，從沒機會用到370天緩衝)。這是他自己程式碼兩個緩衝天數沒對齊
-// 造成的行為，不是我們算錯，用他backtest.js直接算過某個真實案例(1319, 2026-01-19)精確
-// 重現這個機制。但嘗試在我們的優化器複製這個截斷邏輯後，實測驗證期落差反而從1.59pp惡化
-// 到6.72pp，代表還有沒抓到的交互影響，已回退不上線(見runTwoFoldOptimizationAsync的說明)，
-// 保留這段查證紀錄供之後需要時參考。
-
 // 進場成交規則(唯一策略)：不分收盤/開盤版本，一律用執行日的「開盤價」進場——
 // 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
-function prepareEvents(events) {
-  const revisionHistory = computeRevisionHistory(events);
+// floorIdx只給優化器算分段(訓練/驗證/測試)時用，複製同事140天緩衝的「二分搜尋鎖底」
+// 行為(見computeRevisionHistory的說明)；平常主回測/探索器不傳這個參數，行為不變。
+function prepareEvents(events, floorIdx) {
+  const revisionHistory = computeRevisionHistory(events, floorIdx);
   // 先跨UP/DOWN方向去重(同一檔股票同一個執行窗口只留發布時間最晚的那篇)，避免明明應該
   // 被較晚的DOWN蓋掉的UP訊號，因為UP/DOWN分開處理而漏網、還是被當成候選進場。加入
   // news_time_taipei當第三層排序鍵，"keep last"才會穩定挑到當天發布時間最晚的那篇。
-  const deduped = dedupeByExecutionWindow(events);
+  const deduped = dedupeByExecutionWindow(events, floorIdx);
   const up = deduped.filter(e => e.direction === 'UP')
     .slice()
     .sort((a, b) => {
@@ -727,6 +737,18 @@ function prepareEvents(events) {
   return out;
 }
 
+// 2026-07-28：優化器評估「訓練/驗證/測試」某一段的表現時，用這個函式重建一份floorIdx
+// 版的EV_UP，複製同事optimizer.js loadData()的140天緩衝行為(見computeRevisionHistory
+// 的詳細說明)。同一個foldStartDate只算一次(快取)，不是每個candidate各算一次。
+function buildFoldEvUp(foldStartDate) {
+  if (FOLD_EV_UP_CACHE.has(foldStartDate)) return FOLD_EV_UP_CACHE.get(foldStartDate);
+  const floorDateStr = new Date(new Date(foldStartDate + 'T00:00:00Z').getTime() - 140 * 86400000).toISOString().slice(0, 10);
+  const floorIdx = bisectLeft(DATES, floorDateStr);
+  const result = prepareEvents(RAW_EVENTS, floorIdx);
+  FOLD_EV_UP_CACHE.set(foldStartDate, result);
+  return result;
+}
+
 function buildDownByDate(events) {
   // 跟進場邏輯用同一份跨UP/DOWN方向去重過的事件流，才會跟prepareEvents對同一個
   // (ticker,執行窗口)判斷出同樣的贏家，不會兩邊各自漏判。
@@ -786,6 +808,7 @@ async function loadAll() {
     s.closes.push(row.close);
   }
 
+  RAW_EVENTS = events;
   EV_UP = prepareEvents(events);
   DOWN_BY_DATE = buildDownByDate(events);
 
@@ -935,14 +958,14 @@ function allocateWeights(scoresArr, p) {
   return result;
 }
 
-function runBacktest(p, startDate, endDate) {
+function runBacktest(p, startDate, endDate, evUpOverride) {
   const startIdx = bisectLeft(DATES, startDate);
   const endIdx = bisectRight(DATES, endDate) - 1;
   if (startIdx > endIdx || startIdx >= DATES.length || endIdx < 0) {
     return { rows: [], summary: null, trades: [] };
   }
 
-  const candsAll = filterCandidates(EV_UP, p).filter(c => c.entryIdx >= startIdx && c.entryIdx <= endIdx);
+  const candsAll = filterCandidates(evUpOverride || EV_UP, p).filter(c => c.entryIdx >= startIdx && c.entryIdx <= endIdx);
   const entriesByIdx = new Map();
   candsAll.forEach(c => {
     if (!entriesByIdx.has(c.entryIdx)) entriesByIdx.set(c.entryIdx, []);
@@ -1700,19 +1723,22 @@ function buildOptimizerCandidates(baseParams) {
 }
 
 async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
-  // 2026-07-28：曾經嘗試用buildFoldEvUp()複製同事140天歷史緩衝的截斷行為(每段訓練/驗證/
-  // 測試期只看得到段落起始日往前140天內能解析出執行日的訊號)，根因確實查證過、可精確重現
-  // (直接用他backtest.js算出跟他伺服器一致的數字)。但實際接上優化器整體流程後，驗證期落差
-  // 反而從1.59pp惡化到6.72pp——代表這個機制還有其他沒抓到的交互影響(可能是分數變動導致
-  // 候選排名/入選名單跟著變，不是單一訊號分數對不對的問題)，貿然上線風險大於現有已知的
-  // 小落差，已回退保留全域EV_UP，不個別套用fold截斷。候選網格(buildOptimizerCandidates)
-  // 本身已經跟同事optimizer.js完全一致，這是這次驗證信心最高、風險最低的部分。
+  // 2026-07-28修正：每一段(訓練/驗證/測試)都用buildFoldEvUp()複製同事140天緩衝的
+  // 「二分搜尋鎖底」行為(見computeRevisionHistory的詳細說明)。第一次嘗試(單純把緩衝
+  // 之前的文章直接濾掉不用)方向錯誤、實測讓驗證期落差惡化，根因是同事的二分搜尋沒有
+  // 真的丟棄舊文章，是把它們全部鎖到緩衝第一天、讓它們互相碰撞只留最晚發布的一篇——
+  // 這次改用floorIdx鎖底(Math.max(idx,floorIdx))重現，不是直接filter掉。
+  const evUp2023 = buildFoldEvUp('2023-01-01');
+  const evUp2024 = buildFoldEvUp('2024-01-01');
+  const evUp2025 = buildFoldEvUp('2025-01-01');
+  const evUp2026 = buildFoldEvUp('2026-01-01');
+
   const candidates = buildOptimizerCandidates(baseParams);
   const fold1 = [];
   for (let i = 0; i < candidates.length; i++) {
     const p = candidates[i];
-    const train2023 = runBacktest(p, '2023-01-01', '2023-12-31').summary;
-    const validate2024 = runBacktest(p, '2024-01-01', '2024-12-31').summary;
+    const train2023 = runBacktest(p, '2023-01-01', '2023-12-31', evUp2023).summary;
+    const validate2024 = runBacktest(p, '2024-01-01', '2024-12-31', evUp2024).summary;
     fold1.push({ params: p, train2023, validate2024, score: rankValueOptimizer(validate2024) + rankValueOptimizer(train2023) * 0.25 });
     if (i % 8 === 7 && onProgress) { onProgress(i + 1, candidates.length + 24, '第一輪(2023訓練→2024驗證)'); await new Promise(r => setTimeout(r, 0)); }
   }
@@ -1722,16 +1748,16 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
   const fold2 = [];
   for (let i = 0; i < shortlisted.length; i++) {
     const fold = shortlisted[i];
-    const train = runBacktest(fold.params, '2023-01-01', '2024-12-31').summary;
-    const validation = runBacktest(fold.params, '2025-01-01', '2025-12-31').summary;
+    const train = runBacktest(fold.params, '2023-01-01', '2024-12-31', evUp2023).summary;
+    const validation = runBacktest(fold.params, '2025-01-01', '2025-12-31', evUp2025).summary;
     const selectionScore = (rankValueOptimizer(fold.validate2024) + rankValueOptimizer(validation)) / 2 + rankValueOptimizer(train) * 0.20;
     fold2.push({ params: fold.params, train2023: fold.train2023, validate2024: fold.validate2024, train, validation, selectionScore });
     if (onProgress) { onProgress(candidates.length + i + 1, candidates.length + 24, '第二輪(2023-2024訓練→2025驗證)'); await new Promise(r => setTimeout(r, 0)); }
   }
   fold2.sort((a, b) => b.selectionScore - a.selectionScore);
   const selected = fold2[0];
-  const test = runBacktest(selected.params, '2026-01-01', endDate).summary;
-  const full = runBacktest(selected.params, '2023-01-01', endDate).summary;
+  const test = runBacktest(selected.params, '2026-01-01', endDate, evUp2026).summary;
+  const full = runBacktest(selected.params, '2023-01-01', endDate, evUp2023).summary;
   return {
     candidateCount: candidates.length,
     selected, test, full,
