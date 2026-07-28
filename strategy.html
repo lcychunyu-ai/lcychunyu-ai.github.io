@@ -696,18 +696,18 @@ function buildDownByDate(events) {
 }
 
 async function loadAll() {
-  // 2026-07-28：正式網站改讀同事的資料(v_colleague_target_events/get_colleague_price_bundle，
-  // 底層是colleague_revisions/colleague_stock_prices/colleague_taiex_index，同事factset.sqlite
-  // 原封不動搬進來的診斷表)，取代原本我們自己pipeline抓的v_unified_target_events/
-  // get_strategy_price_bundle。方法論(這份strategy.html的JS引擎)完全不變，只換資料來源。
-  // 原本我們自己的表/視圖/RPC都還在，要切回來只要把這兩個名字換回去即可。
-  const events = await sbFetchAll('v_colleague_target_events', {
+  // 2026-07-28：計算方法論已驗證跟同事版本0天分歧(見git log)，資料源切回我們自己的
+  // 正式表(v_unified_target_events/get_strategy_price_bundle/stock_prices)，這樣網站
+  // 才能吃到daily_update.py(07:00新聞)+update_stock_prices.py(15:00股價)每天自動更新
+  // 的資料，不再依賴同事重寄靜態快照。colleague_*表只在方法論驗證階段用過，還留在
+  // Supabase上供之後需要交叉核對時使用，不影響正式網站。
+  const events = await sbFetchAll('v_unified_target_events', {
     select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei',
     direction: 'in.(UP,DOWN)',
-    order: 'date.asc,ticker.asc',
+    order: 'date.asc,id.asc',
   });
 
-  const bundleUrl = new URL(`${SUPABASE_URL}/rest/v1/rpc/get_colleague_price_bundle`);
+  const bundleUrl = new URL(`${SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle`);
   const bundleRes = await fetch(bundleUrl, { method: 'POST', headers: { ...SB_HEADERS, 'Content-Type': 'application/json' }, body: '{}' });
   if (!bundleRes.ok) throw new Error(`股價資料RPC讀取失敗: ${bundleRes.status}`);
   const bundle = await bundleRes.json();
@@ -724,18 +724,19 @@ async function loadAll() {
     if (TAIEX[i] != null && TAIEX[i - 1] != null && TAIEX[i - 1] !== 0) TAIEX_RET[i] = (TAIEX[i] - TAIEX[i - 1]) / TAIEX[i - 1];
   }
 
-  // 2026-07-28新增：直接查colleague_stock_prices原始表，不透過get_colleague_price_bundle()
-  // 這種「先跟大盤交易日曆對齊、對不上的日期直接丟掉」的RPC，動能/波動率回看窗口才能
-  // 正確涵蓋個股自己獨有(大盤那天剛好沒報價)的交易日。
-  const rawPriceRows = await sbFetchAll('colleague_stock_prices', {
-    select: 'ticker,trade_date,close', order: 'ticker.asc,trade_date.asc',
+  // 2026-07-28新增：直接查stock_prices原始表，不透過get_strategy_price_bundle()這種
+  // 「先跟大盤交易日曆對齊、對不上的日期直接丟掉」的RPC，動能/波動率回看窗口才能
+  // 正確涵蓋個股自己獨有(大盤那天剛好沒報價)的交易日。對照strategy_backtest.py的
+  // _fetch_raw_stock_prices()。
+  const rawPriceRows = await sbFetchAll('stock_prices', {
+    select: 'ticker,date,close', order: 'ticker.asc,date.asc',
   });
   PRICES_RAW = new Map();
   for (const row of rawPriceRows) {
     if (row.close == null) continue;
     if (!PRICES_RAW.has(row.ticker)) PRICES_RAW.set(row.ticker, { dates: [], closes: [] });
     const s = PRICES_RAW.get(row.ticker);
-    s.dates.push(row.trade_date);
+    s.dates.push(row.date);
     s.closes.push(row.close);
   }
 
