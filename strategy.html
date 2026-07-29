@@ -2297,49 +2297,61 @@ function buildSensitivityChartSvg(key, cfg, an) {
   gridLines += `<rect x="${padL - 44}" y="${(zeroY - 8).toFixed(1)}" width="40" height="16" rx="4" fill="${panel2}"/>`;
   gridLines += `<text x="${padL - 8}" y="${(zeroY + 3.5).toFixed(1)}" font-size="11" font-weight="700" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">0%</text>`;
 
-  // 2026-07-29新增：專業投資人真正在意的不是曲線平不平滑，是「從哪一個節點開始惡化
-  // 速度突然加快」——找出整條曲線裡「相鄰兩點斜率(每一格的超額報酬變化量)最大」的
-  // 那一段，用警示色+粗線特別標出來，並在該段起點標上「轉折點」，直接回答「過了這裡
-  // 就開始不妙」，不是只把整條線畫成同一個顏色讓使用者自己肉眼比較每一段的陡峭程度。
-  let steepIdx = 0, steepDelta = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const d = Math.abs(pts[i + 1].summary.excessReturnPct - pts[i].summary.excessReturnPct);
-    if (d > steepDelta) { steepDelta = d; steepIdx = i; }
+  // 2026-07-29再修正：使用者指正——重點不是「哪裡變化劇烈」，中軸是超額報酬，真正
+  // 該回答的問題是「維持在哪個範圍內，超額報酬能保持正值(贏大盤)且穩定，這個安全範圍
+  // 的邊界節點在哪裡」，例如超額報酬本來是正的、突然劇烈轉負，那前一個節點就是「別超過
+  // 這裡」的邊界。改成：找出「超額報酬 ≥ 0%」的連續區間(優先取包含目前設定值的那一段，
+  // 沒有的話取最高分那一段)，把這個安全區間用底色highlight整段，邊界節點用箭頭+文字
+  // 明確標出「別低於/別超過多少」，而不是只標出斜率最大的那一小段。
+  const isGood = yVals.map(v => v >= 0);
+  function findRun(containingIdx) {
+    if (containingIdx != null) {
+      if (!isGood[containingIdx]) return null;
+      let s = containingIdx, e = containingIdx;
+      while (s > 0 && isGood[s - 1]) s--;
+      while (e < isGood.length - 1 && isGood[e + 1]) e++;
+      return { start: s, end: e };
+    }
+    let best = null, curStart = null;
+    for (let i = 0; i < isGood.length; i++) {
+      if (isGood[i] && curStart == null) curStart = i;
+      if ((!isGood[i] || i === isGood.length - 1) && curStart != null) {
+        const e = isGood[i] ? i : i - 1;
+        const avg = yVals.slice(curStart, e + 1).reduce((a, b) => a + b, 0) / (e - curStart + 1);
+        if (!best || avg > best.avg) best = { start: curStart, end: e, avg };
+        curStart = null;
+      }
+    }
+    return best;
   }
-  const totalRange = Math.max(...yVals) - Math.min(...yVals) || 1;
-  const showBreakpoint = steepDelta > 15 && steepDelta > totalRange * 0.3;
-
-  const segPath = (i) => `M${x(i).toFixed(1)},${y(pts[i].summary.excessReturnPct).toFixed(1)} L${x(i + 1).toFixed(1)},${y(pts[i + 1].summary.excessReturnPct).toFixed(1)}`;
-  const normalSegs = pts.slice(0, -1).map((p, i) => i === steepIdx && showBreakpoint ? '' : segPath(i)).filter(Boolean).join(' ');
+  const safeRun = findRun(an.baseIdx) || findRun(null);
 
   const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
 
-  // 轉折點的顏色要跟著方向走、不能固定用一種顏色——這個網站紅=漲/綠=跌是台股慣例，
-  // 轉折點如果是「超額報酬變好」(上升)該用漲色，「變差」(下降)才用跌色，固定用同一種
-  // 顏色會讓「▲上升」卻標成「跌色」，跟其他地方的顏色語意自相矛盾。
-  const breakIsFalling = showBreakpoint && pts[steepIdx + 1].summary.excessReturnPct < pts[steepIdx].summary.excessReturnPct;
-  const breakColor = breakIsFalling ? downColor : upColor;
-
-  let breakpointHtml = '';
-  if (showBreakpoint) {
-    const bx1 = x(steepIdx), bx2 = x(steepIdx + 1);
-    const by1 = y(pts[steepIdx].summary.excessReturnPct), by2 = y(pts[steepIdx + 1].summary.excessReturnPct);
-    const dir = breakIsFalling ? '▼' : '▲';
-    const midX = (bx1 + bx2) / 2;
-    const labelY = Math.min(by1, by2) - 10;
-    breakpointHtml = `
-      <rect x="${bx1.toFixed(1)}" y="${padT}" width="${(bx2 - bx1).toFixed(1)}" height="${H - padT - padB}" fill="${breakColor}" opacity="0.12"/>
-      <path d="${segPath(steepIdx)}" fill="none" stroke="${breakColor}" stroke-width="3.6" stroke-linejoin="round"/>
-      <line x1="${bx1.toFixed(1)}" y1="${padT}" x2="${bx1.toFixed(1)}" y2="${H - padB}" stroke="${breakColor}" stroke-width="1" stroke-dasharray="2,2" opacity="0.6"/>
-      <text x="${midX.toFixed(1)}" y="${Math.max(labelY, padT + 10).toFixed(1)}" font-size="10.5" font-weight="700" fill="${breakColor}" text-anchor="middle">${dir} 轉折點：每格${steepDelta.toFixed(0)}pp</text>
-      <text x="${bx1.toFixed(1)}" y="${H - padB + 28}" font-size="9.5" font-weight="700" fill="${breakColor}" text-anchor="middle">↑從這裡開始劇烈變化</text>`;
+  let safeZoneHtml = '';
+  if (safeRun) {
+    const zx1 = x(safeRun.start), zx2 = x(safeRun.end);
+    safeZoneHtml += `<rect x="${zx1.toFixed(1)}" y="${padT}" width="${(zx2 - zx1).toFixed(1)}" height="${H - padT - padB}" fill="${upColor}" opacity="0.16"/>`;
+    if (safeRun.start > 0) {
+      const bx = x(safeRun.start);
+      safeZoneHtml += `
+        <line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>
+        <text x="${bx.toFixed(1)}" y="${padT + 10}" font-size="10" font-weight="700" fill="${downColor}" text-anchor="${safeRun.start < pts.length / 2 ? 'start' : 'end'}">◀ 別低於${fmt(pts[safeRun.start].value)}</text>`;
+    }
+    if (safeRun.end < pts.length - 1) {
+      const bx = x(safeRun.end);
+      safeZoneHtml += `
+        <line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>
+        <text x="${bx.toFixed(1)}" y="${padT + 10}" font-size="10" font-weight="700" fill="${downColor}" text-anchor="${safeRun.end < pts.length / 2 ? 'start' : 'end'}">別超過${fmt(pts[safeRun.end].value)} ▶</text>`;
+    }
   }
 
   const xLabels = pts.map((p, i) => {
     const isBase = i === an.baseIdx;
-    const isBreak = showBreakpoint && i === steepIdx;
-    const color = isBase ? accent : isBreak ? breakColor : inkDim;
-    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase || isBreak ? 11 : 10}" font-weight="${isBase || isBreak ? 700 : 500}" fill="${color}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
+    const isEdge = safeRun && (i === safeRun.start || i === safeRun.end) && (safeRun.start > 0 || safeRun.end < pts.length - 1) && (i === safeRun.start ? safeRun.start > 0 : safeRun.end < pts.length - 1);
+    const color = isBase ? accent : isEdge ? downColor : inkDim;
+    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase || isEdge ? 11 : 10}" font-weight="${isBase || isEdge ? 700 : 500}" fill="${color}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
   }).join('');
 
   // 目前設定值除了圓點放大，額外加一條垂直參考線+「目前」標籤貼在圖表最上緣，
@@ -2352,19 +2364,17 @@ function buildSensitivityChartSvg(key, cfg, an) {
 
   const dots = pts.map((p, i) => {
     const isBase = i === an.baseIdx;
-    const isBreak = showBreakpoint && (i === steepIdx || i === steepIdx + 1);
-    const stroke = isBase ? accent : isBreak ? breakColor : accent;
-    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : isBreak ? 4 : 3}" fill="${isBase ? accent : panelBg}" stroke="${stroke}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : 3}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
   }).join('');
 
   const svgId = 'sv' + Math.random().toString(36).slice(2, 9);
   return { svgId, html: `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%; height:auto;">
     <defs><clipPath id="${svgId}-pos"><rect x="0" y="0" width="${W}" height="${zeroY.toFixed(1)}"/></clipPath><clipPath id="${svgId}-neg"><rect x="0" y="${zeroY.toFixed(1)}" width="${W}" height="${(H - zeroY).toFixed(1)}"/></clipPath></defs>
     ${gridLines}
-    <path d="${areaPath}" fill="${upColor}" opacity="0.32" clip-path="url(#${svgId}-pos)"/>
-    <path d="${areaPath}" fill="${downColor}" opacity="0.32" clip-path="url(#${svgId}-neg)"/>
-    <path d="${normalSegs}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
-    ${breakpointHtml}
+    <path d="${areaPath}" fill="${upColor}" opacity="0.20" clip-path="url(#${svgId}-pos)"/>
+    <path d="${areaPath}" fill="${downColor}" opacity="0.20" clip-path="url(#${svgId}-neg)"/>
+    ${safeZoneHtml}
+    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
     ${dots}
     ${currentTag}
     ${xLabels}
@@ -2412,13 +2422,13 @@ function renderSensitivityResult(container, baseRun, results) {
     <div class="sensitivity-legend">
       <span><span class="lg-dot" style="background:var(--accent);"></span>橘線＝超額報酬隨參數變化的軌跡</span>
       <span><span class="lg-tag">目前</span>＝左側面板現在設定的值</span>
-      <span><span class="lg-swatch" style="background:var(--up);"></span>贏大盤區間（超額報酬 &gt; 0%）</span>
-      <span><span class="lg-swatch" style="background:var(--down);"></span>輸大盤區間（超額報酬 &lt; 0%）</span>
+      <span><span class="lg-swatch" style="background:var(--up); opacity:0.4;"></span>穩定安全區間（超額報酬持續 ≥ 0%）</span>
+      <span><span class="lg-line" style="border-top-color:var(--down);"></span>安全邊界＝超過/低於就開始輸大盤，別跨過這條線</span>
       <span><span class="lg-line"></span>0% 中軸＝跟大盤打平的分界線</span>
     </div>`;
 
   container.innerHTML = `${summaryHtml}${legendHtml}<div class="sensitivity-grid">${panelsHtml}</div>
-    <div class="disclaimer-bar">「鄰近設定落差」= 目前設定值往左右各移動一格(圖上橘色虛線位置往鄰近的點)後，超額報酬變動較大的那一側；數字越大代表這個參數在目前設定附近變化越劇烈，過擬合風險越高。</div>`;
+    <div class="disclaimer-bar">綠色底色區間 = 超額報酬能維持贏過大盤(≥0%)的安全範圍，優先取「包含目前設定值」的那一段；紅色虛線是這個範圍的邊界節點，標明往哪個方向不能再移動。「鄰近設定落差」(右上角標籤) = 目前設定值往左右各移動一格後，超額報酬變動較大的那一側，數字越大代表過擬合風險越高，兩者可以互相對照看。</div>`;
 }
 
 document.getElementById('sensitivity-btn').addEventListener('click', async () => {
