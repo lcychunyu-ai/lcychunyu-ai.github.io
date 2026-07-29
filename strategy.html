@@ -580,25 +580,28 @@
         <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
         <section class="section-card accent-safe" id="optimizer-section">
           <div class="section-head">
-            <div><span class="eyebrow">Out-of-Sample Optimization</span><h3>參數自動最佳化</h3></div>
+            <div><span class="eyebrow">Parameter Optimization</span><h3>參數自動最佳化</h3></div>
             <button class="btn safe small" id="strict-search-btn">重新執行搜尋</button>
           </div>
-          <div class="optimizer-mode-toggle">
-            <label><input type="radio" name="opt-mode" value="official" checked/> 跟同事對照（192組・僅原始綜合分數／第二代多因子）</label>
-            <label><input type="radio" name="opt-mode" value="extended"/> 全模型延伸（384組・含等權／調升幅度加權，我們自己的延伸搜尋）</label>
-          </div>
-          <p class="section-sub" id="optimizer-mode-desc">192組候選：2023訓練→2024驗證，再以2023–2024訓練→2025驗證，兩次驗證綜合選定；2026保留測試不參與選參數。候選網格跟同事optimizer.js的buildCandidates()完全對上，是驗證過的對照基準。</p>
+          <p class="section-sub" id="optimizer-mode-desc">384組候選(涵蓋全部4種配置方式)：2023訓練→2024驗證，再以2023–2024訓練→2025驗證，兩次驗證綜合選定；2026保留測試不參與選參數。</p>
           <div id="strict-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
-        </section>
 
-        <!-- ===== IN-SAMPLE EXPLORATION ===== -->
-        <section class="section-card accent-caution" id="explorer-section">
-          <div class="section-head">
-            <div><span class="eyebrow">In-Sample Exploration</span><h3>歷史最佳策略探索</h3></div>
-            <button class="btn caution small" id="explore-search-btn">載入歷史探索結果</button>
-          </div>
-          <p class="section-sub">144組粗搜(寬範圍隨機取樣)取前8名再各細調24組門檻(共336組，含重複快取)，直接搜尋 2023 至今最高超額報酬；只能回答歷史上是否存在，不能證明未來有效。</p>
-          <div id="explore-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
+          <!-- 2026-07-29：原本「歷史最佳策略探索」是獨立的一整張卡片，跟上面這張外觀太像
+               (都是標題+按鈕+搜尋結果)，容易被誤會是同一個功能做兩次。這兩者其實回答不同
+               問題(這張卡片是「有做訓練/驗證分段、防止過度配適」的正式搜尋；下面這個是
+               「歷史事後最高報酬長怎樣」的天花板參考，沒有分段驗證、不建議直接採用)，
+               保留功能但改成收合在同一張卡片底下的次要區塊，不再是平起平坐的兩張卡片。 -->
+          <details class="table-toggle" id="explorer-section" style="margin-top:18px; border-top:1px solid var(--border); padding-top:14px;">
+            <summary style="font-size:13px;">進階參考：歷史事後最高報酬搜尋（無訓練/驗證分段，僅供對照天花板，不建議直接採用）</summary>
+            <div style="margin-top:12px;">
+              <div class="section-head">
+                <div><span class="eyebrow">Historical Ceiling Reference</span><h3 style="font-size:14px;">歷史最佳策略探索</h3></div>
+                <button class="btn caution small" id="explore-search-btn">載入歷史搜尋結果</button>
+              </div>
+              <p class="section-sub">336組候選(固定網格)，直接搜尋 2023 至今事後報酬最高的參數組合，沒有訓練/驗證分段——只能回答「歷史上曾經存在過這麼好的組合」，不能證明未來有效，數字通常會比上面「參數自動最佳化」樂觀。</p>
+              <div id="explore-result"><div class="empty-state" style="padding:20px;">尚未執行，點按鈕開始搜尋。</div></div>
+            </div>
+          </details>
         </section>
 
         <!-- ===== DAILY LEDGER ===== -->
@@ -886,7 +889,6 @@ function prepareEvents(events, floorIdx) {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.news_time_taipei || '').localeCompare(b.news_time_taipei || '');
     });
-  RAW_UP_COUNT = up.length;
   const histByTicker = new Map();
   const out = [];
   for (const e of up) {
@@ -1031,6 +1033,15 @@ async function loadAll() {
   RAW_EVENTS = dedupedEvents;
   EV_UP = prepareEvents(dedupedEvents);
   DOWN_BY_DATE = buildDownByDate(dedupedEvents);
+  // 2026-07-29修正：「無法配對事件」曾經算出負數——原本RAW_UP_COUNT是prepareEvents()
+  // 內部順手覆蓋的全域變數，但優化器/穩定度分析為了算訓練/驗證/測試分段，會另外呼叫
+  // 好幾十次prepareEvents(RAW_EVENTS, floorIdx)，每次都把這個全域變數覆蓋成「那個分段」
+  // 的事件數(通常比全期間少很多)。只要優化器跑完之後畫面又重繪一次涵蓋度區塊(現在
+  // 優化器跑完會自動同步回主畫面，就會發生這個情況)，讀到的就是被分段運算污染過的
+  // 舊數字，比EV_UP.length還小，兩者相減就變成負數。改成不靠side effect，直接在這裡
+  // 用主資料集(未分段)重新算一次「跨方向去重後的UP事件數」，只在loadAll()執行一次，
+  // 不會再被其他地方的prepareEvents()呼叫污染。
+  RAW_UP_COUNT = dedupeByExecutionWindow(dedupedEvents).filter(e => e.direction === 'UP').length;
 
   // 2026-07-29新增：沿用市場溫度計網站既有的concept_map分類(46個官方產業鏈+3個主題)，
   // 不是重新發明一套分類——讓使用者可以直接篩選「只看某個產業/主題」的候選股票池，
@@ -2301,14 +2312,17 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress, cand
 // 主畫面顯示的是表單上寫死的手動預設值，兩段walk-forward選出來的真正驗證過的參數
 // 只會顯示在下方卡片裡，要手動點「套用全期間」才會反映到主畫面，容易讓人誤以為
 // 首頁看到的數字就是最佳結果。改成頁面載入時自動把選定參數套回表單、重跑主畫面。
+// 2026-07-30簡化：原本用radio切換「192組(僅2種配置方式)」跟「384組(全部4種配置方式)」
+// 兩種搜尋範圍，使用者反映兩者選出來的最終參數實際上經常一樣(4種配置方式互相比較後，
+// 表現最好的那個本來就會贏)，多一個選項只是徒增介面複雜度、沒有實質差異，改成固定只
+// 用涵蓋全部4種配置方式的搜尋範圍，不用使用者自己選。
 async function runStrictSearchAndRender() {
-  const mode = document.querySelector('input[name="opt-mode"]:checked')?.value || 'official';
-  const isExtended = mode === 'extended';
+  const isExtended = true;
   const btn = document.getElementById('strict-search-btn');
   const base = readParams();
   const testEnd = document.getElementById('p-end').value;
   const out = document.getElementById('strict-result');
-  const candidateBuilder = isExtended ? buildExtendedOptimizerCandidates : buildOptimizerCandidates;
+  const candidateBuilder = buildExtendedOptimizerCandidates;
   const totalCandidates = candidateBuilder(base).length;
   btn.disabled = true;
   renderSearchProgress(out, 0, totalCandidates + 24, '搜尋中');
@@ -2331,7 +2345,7 @@ async function runStrictSearchAndRender() {
   recGrid.className = 'recommend-grid';
   recGrid.innerHTML = `
     <div class="recommend-card">
-      <h4>${isExtended ? '全模型' : ''}兩段walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
+      <h4>兩段walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
       <div class="mini-stat-row">
         <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${trainSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(trainSummary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(trainSummary.totalTaiexReturnPct)} · 超額 ${fmtPct(trainSummary.excessReturnPct)}</div></div>
         <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${validSummary && validSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(validSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(validSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(validSummary?.excessReturnPct)}</div></div>
@@ -2347,7 +2361,7 @@ async function runStrictSearchAndRender() {
 
   const disclaimer = document.createElement('div');
   disclaimer.className = 'disclaimer-bar';
-  const candidateNote = isExtended ? `${totalCandidates}組候選(含等權/調升幅度加權，是我們自己的延伸搜尋，不是同事192組候選的原始版本)` : `${totalCandidates}組候選(跟同事optimizer.js的buildCandidates()完全對上，驗證過的對照基準)`;
+  const candidateNote = `${totalCandidates}組候選(涵蓋全部4種配置方式)`;
   disclaimer.textContent = isOverfit
     ? `${candidateNote}經兩段walk-forward選出，在驗證期(2025)表現明顯轉弱，代表很可能只是配適到訓練期的雜訊，不建議直接採用。2026保留期只揭露一次結果，不會回頭影響推薦參數。`
     : `${candidateNote}經兩段walk-forward(2023訓練→2024驗證，再2023-2024訓練→2025驗證)綜合排名選出。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。`;
@@ -2419,15 +2433,6 @@ async function runStrictSearchAndRender() {
 }
 
 document.getElementById('strict-search-btn').addEventListener('click', () => { runStrictSearchAndRender(); });
-document.querySelectorAll('input[name="opt-mode"]').forEach(el => {
-  el.addEventListener('change', () => {
-    const modeLabel = document.querySelector('input[name="opt-mode"]:checked').value === 'extended'
-      ? '384組候選：等權/調升幅度加權/原始綜合分數/第二代多因子分數全部納入，是我們自己的延伸搜尋，不是同事192組候選的原始版本，兩段walk-forward流程相同。'
-      : '192組候選：2023訓練→2024驗證，再以2023–2024訓練→2025驗證，兩次驗證綜合選定；2026保留測試不參與選參數。候選網格跟同事optimizer.js的buildCandidates()完全對上，是驗證過的對照基準。';
-    document.getElementById('optimizer-mode-desc').textContent = modeLabel;
-    runStrictSearchAndRender();
-  });
-});
 
 // ----------------------------------------------------------------------------
 // In-Sample Exploration：選參流程+候選產生方式完全對照同事explorer.js的exploreExecution()
