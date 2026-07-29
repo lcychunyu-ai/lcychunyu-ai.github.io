@@ -117,6 +117,27 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2396938a' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; cursor: pointer;
   }
+  /* 2026-07-29新增：產業/主題篩選改成可複選的checkbox下拉——原本單選<select>沒辦法同時
+     選「半導體+通訊網路」這種組合，改成自訂的trigger按鈕+彈出面板，面板內用checkbox
+     分組(主題/官方產業鏈)列出，選了幾個就在按鈕上顯示摘要。 */
+  .multiselect { position: relative; }
+  .multiselect-trigger {
+    width: 100%; text-align: left; font-size: 13px; color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 28px 7px 9px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2396938a' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .multiselect-trigger:focus { outline: none; border-color: var(--accent); }
+  .multiselect-panel {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+    max-height: 280px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 8px;
+  }
+  .multiselect-panel.open { display: block; }
+  .multiselect-panel .ms-group-label { font-size: 10px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; padding: 6px 6px 3px; }
+  .multiselect-panel label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-dim); padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+  .multiselect-panel label:hover { background: var(--panel-2); }
+  .multiselect-panel input[type="checkbox"] { accent-color: var(--accent); }
   .input-suffix { position: relative; }
   .input-suffix input { padding-right: 40px !important; }
   .input-suffix .suffix {
@@ -419,9 +440,12 @@
         <fieldset>
           <legend>候選股票池</legend>
           <div class="param-field" style="margin-bottom:0;">
-            <label>產業/主題篩選</label>
-            <select id="p-concept"><option value="">不限（全部216檔）</option></select>
-            <p class="hint" style="margin:8px 0 0;">沿用「市場溫度計」既有的官方產業鏈/主題分類，只是縮小候選股票池，篩選門檻、評分、配置、出場邏輯完全不變。</p>
+            <label>產業/主題篩選（可複選）</label>
+            <div class="multiselect" id="concept-multiselect">
+              <button type="button" class="multiselect-trigger" id="concept-trigger">不限（全部216檔）</button>
+              <div class="multiselect-panel" id="concept-panel"></div>
+            </div>
+            <p class="hint" style="margin:8px 0 0;">沿用「市場溫度計」既有的官方產業鏈/主題分類，可以同時勾選多個(例如半導體+通訊網路)，候選池取聯集，篩選門檻、評分、配置、出場邏輯完全不變。</p>
           </div>
         </fieldset>
 
@@ -1047,10 +1071,18 @@ async function loadAll() {
 // 持有」才會真的整篇忽略。改成保留所有有效價格資料的事件、加一個qualifies欄位，篩選
 // 判斷留到runBacktest的逐日迴圈依「這檔股票今天在不在active裡」分流處理。
 function filterCandidates(cands, p) {
-  // 2026-07-29新增：候選股票池篩選(產業/主題)——限制在concept_map裡屬於選定分類的
-  // 股票才會被當成候選，不在清單內的股票從一開始就不會進場，其他篩選/評分/配置/
-  // 出場邏輯完全不變。conceptFilter為空(不限)時直接跳過，行為不變。
-  const conceptTickers = p.conceptFilter ? CONCEPT_TICKERS.get(p.conceptFilter) : null;
+  // 2026-07-29新增：候選股票池篩選(產業/主題，可複選)——限制在concept_map裡屬於「任一」
+  // 選定分類的股票才會被當成候選(取聯集，例如同時勾選半導體+通訊網路，兩邊的股票都算
+  // 候選)，不在清單內的股票從一開始就不會進場，其他篩選/評分/配置/出場邏輯完全不變。
+  // conceptFilters為空陣列(不限)時直接跳過，行為不變。
+  let conceptTickers = null;
+  if (p.conceptFilters && p.conceptFilters.length) {
+    conceptTickers = new Set();
+    for (const key of p.conceptFilters) {
+      const s = CONCEPT_TICKERS.get(key);
+      if (s) for (const t of s) conceptTickers.add(t);
+    }
+  }
   return cands
     .filter(c => c.entryPrice != null && c.upsidePrice != null)
     .filter(c => !conceptTickers || conceptTickers.has(c.ticker))
@@ -1448,7 +1480,7 @@ function readParams() {
     maxPortfolioExposure: Number(document.getElementById('p-maxExposure').value) / 100,
     avgRule: document.getElementById('p-avgRule').value,
     avgBoostMult: Number(document.getElementById('p-avgBoost').value),
-    conceptFilter: document.getElementById('p-concept').value || null,
+    conceptFilters: [...SELECTED_CONCEPTS],
   };
 }
 
@@ -1961,29 +1993,57 @@ document.getElementById('param-panel').addEventListener('change', (evt) => {
 // ============================================================================
 // 2026-07-29新增：concept_map資料載入後才知道有哪些產業/主題可選，所以這個函式在
 // loadAll()抓完concept_map後才呼叫，不是像populateDateYMD那樣頁面一開就能填。
-// dimension用optgroup分組(主題 vs 官方產業鏈)，同一個dimension內按注意力權重加總
-// 由大到小排序，常見的大類排前面。
+// 2026-07-29改成可複選：原本單選<select>沒辦法同時選「半導體+通訊網路」這種組合，
+// 改成checkbox面板，dimension分組(主題/官方產業鏈)、同組內按檔數由大到小排序。
+let SELECTED_CONCEPTS = new Set();
 function populateConceptSelect(conceptsByDim) {
-  const sel = document.getElementById('p-concept');
+  const panel = document.getElementById('concept-panel');
   const dimLabel = { theme: '主題', value_chain: '官方產業鏈' };
   const dimOrder = ['theme', 'value_chain'];
+  panel.innerHTML = '';
   for (const dim of dimOrder) {
     const concepts = conceptsByDim.get(dim);
     if (!concepts || !concepts.size) continue;
-    const group = document.createElement('optgroup');
-    group.label = dimLabel[dim] || dim;
+    const groupLabel = document.createElement('div');
+    groupLabel.className = 'ms-group-label';
+    groupLabel.textContent = dimLabel[dim] || dim;
+    panel.appendChild(groupLabel);
     [...concepts]
       .map(c => ({ name: c, key: `${dim}::${c}` }))
       .sort((a, b) => (CONCEPT_TICKERS.get(b.key)?.size || 0) - (CONCEPT_TICKERS.get(a.key)?.size || 0))
       .forEach(({ name, key }) => {
-        const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = `${name}（${CONCEPT_TICKERS.get(key).size}檔）`;
-        group.appendChild(opt);
+        const label = document.createElement('label');
+        label.innerHTML = `<input type="checkbox" value="${key}"/> ${name}（${CONCEPT_TICKERS.get(key).size}檔）`;
+        panel.appendChild(label);
       });
-    sel.appendChild(group);
   }
 }
+
+function updateConceptTrigger() {
+  const trigger = document.getElementById('concept-trigger');
+  if (SELECTED_CONCEPTS.size === 0) { trigger.textContent = '不限（全部216檔）'; return; }
+  const names = [...SELECTED_CONCEPTS].map(key => key.split('::')[1]);
+  const unionCount = new Set(names.flatMap(n => {
+    const key = [...SELECTED_CONCEPTS].find(k => k.endsWith(`::${n}`));
+    return key ? [...(CONCEPT_TICKERS.get(key) || [])] : [];
+  })).size;
+  trigger.textContent = names.length <= 2 ? `${names.join('、')}（${unionCount}檔）` : `已選 ${names.length} 個分類（${unionCount}檔）`;
+}
+
+document.getElementById('concept-trigger').addEventListener('click', (evt) => {
+  evt.stopPropagation();
+  document.getElementById('concept-panel').classList.toggle('open');
+});
+document.getElementById('concept-panel').addEventListener('click', (evt) => {
+  const cb = evt.target.closest('input[type="checkbox"]');
+  if (!cb) return;
+  if (cb.checked) SELECTED_CONCEPTS.add(cb.value); else SELECTED_CONCEPTS.delete(cb.value);
+  updateConceptTrigger();
+});
+document.addEventListener('click', (evt) => {
+  const ms = document.getElementById('concept-multiselect');
+  if (ms && !ms.contains(evt.target)) document.getElementById('concept-panel').classList.remove('open');
+});
 
 function populateDateYMD(prefix, defaultISO) {
   const [dy, dm, dd] = defaultISO.split('-').map(Number);
