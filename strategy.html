@@ -1808,6 +1808,28 @@ function runAndRenderManual(bestExcessInfo) {
 
 document.getElementById('run-btn').addEventListener('click', () => runAndRenderManual());
 
+// 2026-07-29新增：原本只有按「執行回測」才會重跑，改參數(不管是滑桿數字、下拉選單、
+// 配置方式、出場規則)之後，上面的hero卡片/報酬曲線/超額曲線/每日帳本全部維持改參數
+// 之前的舊結果，看起來像是「調整了卻沒反應」、「帳本沒有更動」——不是帳本本身壞掉，
+// 是整個右側結果區塊本來就要手動點按鈕才會重算。改成：param-panel裡任何欄位一有
+// 變動，就debounce後自動重新執行回測，所有版塊(hero/曲線/帳本)才會一起跟著更新，
+// 不用每次都手動點「執行回測」。p-capital(執行資金)例外——它只影響帳本的股數換算，
+// 不影響回測本身的權重/報酬，本來就有自己專屬的oninput只重繪帳本明細，不需要also
+// 觸發整個回測重算。年/月/日的日期下拉也算在內，一起自動重跑。
+let autoRunTimer = null;
+function scheduleAutoRun() {
+  clearTimeout(autoRunTimer);
+  autoRunTimer = setTimeout(() => runAndRenderManual(), 400);
+}
+document.getElementById('param-panel').addEventListener('input', (evt) => {
+  if (evt.target.id === 'p-capital') return;
+  scheduleAutoRun();
+});
+document.getElementById('param-panel').addEventListener('change', (evt) => {
+  if (evt.target.id === 'p-capital') return;
+  scheduleAutoRun();
+});
+
 // ============================================================================
 // 日期改成年/月/日三個獨立下拉選單，可以直接點開選、不用每次都點日曆——
 // #p-start/#p-end還是維持原本的ISO字串(給readParams()等既有邏輯讀)，
@@ -2094,6 +2116,29 @@ async function runStrictSearchAndRender() {
   trainTableWrap.appendChild(trainTable);
   renderGridTable(trainTable, result.shortlist);
   out.appendChild(trainTableWrap);
+
+  // 2026-07-29新增：優化器選出的參數，之前完全沒有跟「參數穩定度分析」接起來——
+  // 使用者按「套用全期間」前，看不到這組被選中的參數是不是也站在懸崖邊的局部尖峰
+  // (就像之前發現「持股數=5」那次一樣)。這裡自動用選定參數(套用全期間的那組日期
+  // 範圍)跑一次同樣的穩定度分析，摘要卡片一律顯示，完整6張圖表收合在底下，
+  // 才是真正把「最佳化」跟「穩定度檢查」接成一個完整迴圈，不是兩個互不相干的功能。
+  const stabilityWrap = document.createElement('div');
+  stabilityWrap.style.marginTop = '16px';
+  stabilityWrap.innerHTML = `<p style="font-size:12px; color:var(--ink-faint); margin-bottom:8px;">正在檢查這組推薦參數的穩定度…</p>`;
+  out.appendChild(stabilityWrap);
+  runSensitivityAnalysisAsync(selected.params, '2023-01-01', testEnd).then(({ baseRun: sBaseRun, results: sResults }) => {
+    const ranked = Object.entries(sResults).map(([k, cfg]) => [k, sensitivityAnalyze(cfg)]).sort((a, b) => b[1].worstNeighborDrop - a[1].worstNeighborDrop);
+    const mostFragile = ranked[0];
+    const isFragile = mostFragile[1].worstNeighborDrop > 40;
+    stabilityWrap.innerHTML = `
+      <div class="disclaimer-bar" style="${isFragile ? '' : 'background:var(--safe-dim); color:var(--safe-ink);'}">
+        <b>${isFragile ? '⚠ 穩定度檢查：' : '✓ 穩定度檢查：'}</b>
+        「${SENSITIVITY_SWEEPS[mostFragile[0]].label}」鄰近設定落差 ${mostFragile[1].worstNeighborDrop.toFixed(0)}pp
+        ${isFragile ? '——這組推薦參數對這個參數很敏感，可能是局部尖峰，套用前建議先看完整分析' : '，在測試範圍內相對穩健，不是站在懸崖邊的局部尖峰'}。
+      </div>
+      <details class="table-toggle" style="margin-top:8px;"><summary>顯示完整穩定度分析(6個參數)</summary><div class="stability-detail" style="margin-top:10px;"></div></details>`;
+    renderSensitivityResult(stabilityWrap.querySelector('.stability-detail'), sBaseRun, sResults);
+  });
 
   document.getElementById('btn-rec-full').onclick = () => {
     applyParamsToForm(selected.params);
