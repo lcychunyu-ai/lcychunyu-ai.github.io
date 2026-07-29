@@ -240,6 +240,17 @@
   .explainer b { color: var(--ink); }
   .explainer .formula { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink); }
 
+  /* 2026-07-29新增：配置方式說明改成「白話優先、公式其次」的排版——模型名稱最粗最大，
+     白話說明正常字重，範例用強調色小標籤，公式參考縮小淡化放最後，人類肉眼掃過去
+     第一眼看到的是文字邏輯，不是一串符號。 */
+  .model-explain { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .model-explain:last-of-type { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+  .model-explain .model-name { font-size: 13px; font-weight: 700; color: var(--ink); margin: 0 0 4px; }
+  .model-explain .model-plain { font-size: 12.5px; line-height: 1.7; color: var(--ink-dim); margin: 0 0 6px; }
+  .model-explain .model-example { font-size: 12px; color: var(--ink-dim); background: var(--panel-2); border-radius: 6px; padding: 6px 10px; margin: 0 0 6px; }
+  .model-explain .model-example b { color: var(--accent); }
+  .model-explain .formula-ref { font-size: 10.5px; color: var(--ink-faint); font-family: ui-monospace, monospace; margin: 0; }
+
   .empty-state { text-align: center; color: var(--ink-faint); font-size: 13px; }
   .grid-result-row { cursor: pointer; }
   .grid-result-row:hover td { background: var(--panel-2); }
@@ -426,19 +437,35 @@
           <details class="explainer-toggle">
             <summary>配置方式怎麼計算？</summary>
             <div class="explainer" style="margin-top:10px;">
-              <p><b>平均配置／等權配置</b></p>
-              <span class="formula">S_i = 1，w_i = 1 / N</span>
-              <p style="margin:6px 0 0; font-size:11px;">不考慮調升幅度、分析師數或上漲空間，通過門檻的股票地位完全相同。</p>
-              <p style="margin-top:8px;"><b>調升幅度加權</b></p>
-              <span class="formula">S_i = R_i，w_i = R_i / ΣR_j</span>
-              <p style="margin:6px 0 0; font-size:11px;">R_i = 新目標價/舊目標價 − 1。假設調升幅度越大，訊號越強，投入越多。</p>
-              <p style="margin-top:8px;"><b>原始綜合分數</b></p>
-              <span class="formula">S_i = R_i^α × A_i^β × U_i^γ（預設 α=1, β=0.5, γ=1）</span>
-              <p style="margin:6px 0 0; font-size:11px;">A_i為分析師人數，U_i=新目標價/訊號執行日前一交易日收盤價−1。分析師數開根號(β=0.5)是為了讓人數增加仍加分，但避免大型權值股單靠分析師多就主導排名。</p>
-              <p style="margin-top:8px;"><b>第二代多因子分數（推薦）</b></p>
-              <span class="formula" style="margin-bottom:0;">S_i = AR_i × ln(1+A_i) × CU_i × RM_i × RB_i ÷ VOL_i</span>
-              <p style="margin:6px 0 0; font-size:11px;">AR_i異常調升：|R_i|相對該股過去一年調升幅度中位數，clip在0.25~4；CU_i上漲空間：clip在1%~60%；RM_i相對動能：個股20日報酬減大盤20日報酬，clip在0.25~2(即1+相對動能)；RB_i連續上修：1+0.15×過去60日內額外調升次數；VOL_i波動率：近20日報酬年化標準差，下限10%。</p>
-              <p style="margin-top:8px; font-size:11px;">四種模型的分數轉權重流程相同：篩選合格股票→依分數排序→(若設最大持股數)取前K檔→依分數比例分配初始權重→套用單檔上限，超過上限的固定在上限、剩餘資金依其他股票分數重新分配→股票太少湊不滿曝險上限時，剩餘保留現金。</p>
+              <!-- 2026-07-29重寫：原本公式(S_i=R_i^α×A_i^β×U_i^γ這種)直接當第一行放最大最粗，
+                   是給電腦看的符號記法，人類使用者要先猜懂每個字母是什麼才看得懂。改成每個
+                   模型先講白話邏輯、配一個帶實際數字的範例，公式改成放在最後、字體縮小、當
+                   「技術參考」用，不是主要閱讀內容。 -->
+              <div class="model-explain">
+                <p class="model-name">① 平均配置／等權配置</p>
+                <p class="model-plain">不管訊號強弱，符合條件的股票一律平分資金。</p>
+                <p class="model-example">舉例：符合條件的有 5 檔股票 → 每檔都拿 <b>20%</b>。</p>
+                <p class="formula-ref">公式參考：S = 1，權重 = 1 ÷ 檔數</p>
+              </div>
+              <div class="model-explain">
+                <p class="model-name">② 調升幅度加權</p>
+                <p class="model-plain">這次目標價調升幅度越大，代表訊號越強，分到的資金也越多，跟調升百分比成正比。</p>
+                <p class="model-example">舉例：A股調升10%、B股調升5% → A拿 <b>10÷(10+5)=66.7%</b>，B拿 <b>33.3%</b>。</p>
+                <p class="formula-ref">公式參考：S = R，權重 = R ÷ 全部候選R加總（R=新目標價/舊目標價−1）</p>
+              </div>
+              <div class="model-explain">
+                <p class="model-name">③ 原始綜合分數</p>
+                <p class="model-plain">同時看「調升幅度」「分析師人數」「上漲空間」三個指標，乘在一起當分數；分析師人數開根號計算，讓人數增加仍加分，但避免大型權值股單靠分析師多就主導排名。</p>
+                <p class="model-example">舉例：調升10%、9位分析師、上漲空間20% → 分數 = <b>0.10 × √9 × 0.20 = 0.06</b>。</p>
+                <p class="formula-ref">公式參考：S = 調升幅度^α × 分析師數^β × 上漲空間^γ（預設 α=1, β=0.5, γ=1）</p>
+              </div>
+              <div class="model-explain" style="margin-bottom:0;">
+                <p class="model-name">④ 第二代多因子分數（推薦）</p>
+                <p class="model-plain">比③再多考慮兩件事：這次調升是不是比這檔股票「平常的調升幅度」誇張很多（異常調升，越異常分數越高）；這檔股票最近是不是已經在漲、跑贏大盤（相對動能，跑輸大盤會扣分）。同時用波動度打折——同樣訊號，優先選價格比較穩定的股票。</p>
+                <p class="model-example">五個因子（異常調升、分析師數、上漲空間、相對動能、連續上修）相乘，再除以波動率；任一項越有利，分數越高。</p>
+                <p class="formula-ref">公式參考：S = 異常調升 × ln(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</p>
+              </div>
+              <p style="margin-top:10px; font-size:11px; color:var(--ink-faint);">四種模型分數轉權重的流程相同：篩選合格股票→依分數排序→(若設最大持股數)取前K檔→依分數比例分配初始權重→套用單檔上限，超過上限的固定在上限、剩餘資金依其他股票分數重新分配→股票太少湊不滿曝險上限時，剩餘保留現金。</p>
             </div>
           </details>
 
@@ -616,6 +643,12 @@ const FOLD_EV_UP_CACHE = new Map();
 let PRICES_RAW = new Map();
 // 2026-07-29新增：市場溫度計網站既有的concept_map分類，concept名稱 -> Set(ticker)。
 let CONCEPT_TICKERS = new Map();
+// 2026-07-29新增：股票代號 -> 中文公司名稱，讓帳本/持股/買賣表不再只顯示代號。
+let TICKER_NAMES = new Map();
+function tickerLabel(t) {
+  const name = TICKER_NAMES.get(t);
+  return name ? `${t} ${name}` : t;
+}
 
 // 2026-07-28新增：同事的新聞/股價資料庫本來就從2023-01-03才開始(FactSet/鉅亨網的樣本
 // 起點)，我們自己的stock_prices因為另外回補過2021年至今的歷史，回看窗口在資料最早期
@@ -926,7 +959,7 @@ async function loadAll() {
   // 的資料，不再依賴同事重寄靜態快照。colleague_*表只在方法論驗證階段用過，還留在
   // Supabase上供之後需要交叉核對時使用，不影響正式網站。
   const events = await sbFetchAll('v_unified_target_events', {
-    select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei',
+    select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei,company',
     direction: 'in.(UP,DOWN)',
     order: 'date.asc,id.asc',
   });
@@ -977,7 +1010,7 @@ async function loadAll() {
   // 兩個不同dimension、剛好同名的分類靜默合併成一個集合，下拉選單也會出現兩個一模一樣
   // 的「半導體」選項，選哪個都套用同一份合併後的清單，使用者完全看不出來。改用
   // `${dimension}::${concept}` 當key，兩個「半導體」各自獨立，不會互相污染。
-  const conceptRows = await sbFetchAll('concept_map', { select: 'ticker,concept,dimension' });
+  const conceptRows = await sbFetchAll('concept_map', { select: 'ticker,concept,dimension,company_name' });
   CONCEPT_TICKERS = new Map(); // "dimension::concept" -> Set(ticker)
   const conceptsByDim = new Map(); // dimension -> Set(concept)
   for (const row of conceptRows) {
@@ -986,6 +1019,12 @@ async function loadAll() {
     CONCEPT_TICKERS.get(key).add(row.ticker);
     if (!conceptsByDim.has(row.dimension)) conceptsByDim.set(row.dimension, new Set());
     conceptsByDim.get(row.dimension).add(row.concept);
+    if (row.company_name && !TICKER_NAMES.has(row.ticker)) TICKER_NAMES.set(row.ticker, row.company_name);
+  }
+  // concept_map覆蓋216檔中的大部分，但不保證100%——用events自己帶的company欄位補漏，
+  // 兩邊來源都沒有的股票，顯示上就退回只顯示代號，不會整頁報錯。
+  for (const e of events) {
+    if (e.company && !TICKER_NAMES.has(e.ticker)) TICKER_NAMES.set(e.ticker, e.company);
   }
   populateConceptSelect(conceptsByDim);
 
@@ -1200,7 +1239,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
         const te = tradeEntry.get(t);
         tradeEntry.delete(t);
         trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
-        sellsToday.push({ ticker: t, reason });
+        sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
       }
       if (oldW > 1e-9) {
         orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPrice, reason });
@@ -1638,7 +1677,7 @@ function buildDailyExplanation(r, prevRow) {
         : `新訊號進場當天最多新增前 ${r.maxPositions} 檔，已持有部位不會因排名下滑而被強制出場`)
     : '不限持股數';
   const holdingsSorted = r.holdings.slice().sort((a, b) => b.weight - a.weight);
-  const top = holdingsSorted.slice(0, 4).map(h => `${h.ticker} ${(h.weight * 100).toFixed(2)}%`).join('、');
+  const top = holdingsSorted.slice(0, 4).map(h => `${tickerLabel(h.ticker)} ${(h.weight * 100).toFixed(2)}%`).join('、');
   const nBuy = r.buys.length, nSell = r.sells.length;
   const dailyPct = fmtPct(r.dailyReturn * 100);
   const flow = r.dailyReturn >= 0 ? `提領 ${(r.dailyReturn * 100).toFixed(2)}%` : `補入 ${(-r.dailyReturn * 100).toFixed(2)}%`;
@@ -1691,24 +1730,28 @@ function renderLedgerDetail() {
   const holdingsRows = r.attribution.slice().sort((a, b) => b.weight - a.weight).map(a => {
     const lots = lotsFor(a.weight, capital, a.priceEnd);
     const space = (a.target != null && a.priceEnd != null && a.priceEnd > 0) ? ((a.target - a.priceEnd) / a.priceEnd * 100) : null;
-    return `<tr><td><b>${a.ticker}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${a.referenceClose != null ? a.referenceClose.toLocaleString() : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
+    return `<tr><td><b>${tickerLabel(a.ticker)}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${a.referenceClose != null ? a.referenceClose.toLocaleString() : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
   }).join('');
 
+  // 2026-07-29修正：賣出列原本只顯示成交價，看不出「賣在哪、賺賠多少」，而且成交價是
+  // 拿PRICES(收盤價)重算的，跟策略規則(出場在開盤價執行)對不上——改用sellsToday記錄的
+  // entryPrice/exitPrice(執行時當下就存好的真實開盤價)直接算損益%，賣出列補上「進場價→
+  // 出場價」跟「損益%」兩欄，才回答得出「賣出什麼股票、賣在哪裡、賺賠多少」這個問題。
   const buySellRows = [
-    ...r.buys.map(b => `<tr><td><span class="tag buy">買進</span></td><td><b>${b.ticker}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td>符合調升條件</td></tr>`),
+    ...r.buys.map(b => `<tr><td><span class="tag buy">買進</span></td><td><b>${tickerLabel(b.ticker)}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td class="mono">—</td><td>符合調升條件</td></tr>`),
     ...r.sells.map(s => {
-      const priceArr = PRICES[s.ticker];
-      const exitP = priceArr ? priceArr[r.idx] : null;
-      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${s.ticker}</b></td><td class="mono">${exitP != null ? exitP.toLocaleString() : '—'}</td><td class="mono">—</td><td>${s.reason}</td></tr>`;
+      const pnlPct = (s.entryPrice != null && s.exitPrice != null && s.entryPrice !== 0) ? (s.exitPrice / s.entryPrice - 1) * 100 : null;
+      const priceLabel = (s.entryPrice != null && s.exitPrice != null) ? `${s.entryPrice.toLocaleString()} → ${s.exitPrice.toLocaleString()}` : (s.exitPrice != null ? s.exitPrice.toLocaleString() : '—');
+      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${tickerLabel(s.ticker)}</b></td><td class="mono">${priceLabel}</td><td class="mono">${s.weight != null ? fmtPct(s.weight * 100) : '—'}</td><td class="mono ${pnlPct != null && pnlPct >= 0 ? 'up' : 'down'}" style="color:${pnlPct != null ? (pnlPct >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td><td>${s.reason}</td></tr>`;
     }),
-  ].join('') || '<tr><td colspan="5" style="color:var(--ink-faint);">今日無買賣</td></tr>';
+  ].join('') || '<tr><td colspan="6" style="color:var(--ink-faint);">今日無買賣</td></tr>';
 
   // 2026-07-28新增：對照同事backtest.js的positionReturns，把隔夜段(前收→開盤，用重新
   // 配置前的舊權重)也拆到個股層級一起顯示，不再只有盤中段——這樣表格裡每一列的貢獻
   // 加總才會等於當日總報酬，不是只等於盤中段。
   const overnightRows = (r.overnightAttribution || []).map(a => `
     <tr>
-      <td><b>${a.ticker}</b></td>
+      <td><b>${tickerLabel(a.ticker)}</b></td>
       <td style="color:var(--ink-faint);">前收至開盤(隔夜段)</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
       <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
@@ -1718,7 +1761,7 @@ function renderLedgerDetail() {
     </tr>`);
   const intradayRows = r.attribution.map(a => `
     <tr>
-      <td><b>${a.ticker}</b></td>
+      <td><b>${tickerLabel(a.ticker)}</b></td>
       <td style="color:var(--ink-faint);">開盤至收盤(盤中段)${a.isEntryDay ? '·進場日' : ''}</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
       <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
@@ -1767,7 +1810,7 @@ function renderLedgerDetail() {
       </div>
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>動作</th><th>股票</th><th>成交價</th><th>權重變化</th><th>原因</th></tr></thead>
+          <thead><tr><th>動作</th><th>股票</th><th>成交價（賣出：進場→出場）</th><th>權重</th><th>損益</th><th>原因</th></tr></thead>
           <tbody>${buySellRows}</tbody>
         </table>
       </div>
@@ -1787,18 +1830,18 @@ function renderLedgerDetail() {
     <div class="eyebrow-row"><span class="eyebrow">History</span></div>
     <div class="block-title" style="margin-left:0; font-size:15px;">每日帳本</div>
     <details class="table-toggle">
-      <summary>顯示最近 60 個交易日逐日紀錄</summary>
-      <div class="table-wrap" style="margin-top:8px;">
+      <summary>顯示全部 ${rows.length} 個交易日逐日紀錄</summary>
+      <div class="table-wrap" style="margin-top:8px; max-height:520px; overflow-y:auto;">
         <table class="book-table">
           <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
-          <tbody>${rows.slice().reverse().slice(0, 60).map(rr => {
+          <tbody>${rows.slice().reverse().map(rr => {
             const exposure = rr.exposure * 100;
             const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
             return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
           }).join('')}</tbody>
         </table>
       </div>
-      <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">僅顯示最近 60 個交易日，完整資料請用「匯出每日 CSV」。</p>
+      <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">已顯示完整回測期間全部交易日(表格內可捲動)；若要做進一步分析，也可用「匯出每日 CSV」。</p>
     </details>`;
 }
 
@@ -1811,10 +1854,10 @@ function exportCsv() {
   const rows = CURRENT_ROWS;
   if (!rows.length) return;
   const taiexBase = TAIEX[rows[0].idx];
-  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '大盤指數點位累積漲幅', '超額報酬', '曝險', '閒置現金比例', '平帳資金流', '持股數', '持股清單(ticker:weight%)'];
+  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '大盤指數點位累積漲幅', '超額報酬', '曝險', '閒置現金比例', '平帳資金流', '持股數', '持股清單(代號 名稱:weight%)'];
   const lines = [header.join(',')];
   rows.forEach(r => {
-    const holdingsStr = r.holdings.map(h => `${h.ticker}:${(h.weight * 100).toFixed(2)}`).join(';');
+    const holdingsStr = r.holdings.map(h => `${tickerLabel(h.ticker)}:${(h.weight * 100).toFixed(2)}`).join(';');
     const exposure = r.exposure;
     const benchmarkPriceCumulative = (taiexBase != null && TAIEX[r.idx] != null) ? (TAIEX[r.idx] / taiexBase - 1) : null;
     lines.push([
