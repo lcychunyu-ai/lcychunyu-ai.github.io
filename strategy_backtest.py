@@ -116,6 +116,27 @@ def _fetch_raw_stock_prices(table: str = "stock_prices"):
     return raw
 
 
+def _dedupe_by_content_signature(events: pd.DataFrame) -> pd.DataFrame:
+    """2026-07-29新增：內容重複去重(對照同事articles表的duplicate_signature/duplicate_rank
+    欄位)——同一檔股票同一天，同一篇新聞被系統重複發布兩次(例如08:10跟10:10各發一篇，
+    old_target/new_target/analyst_count完全相同)，是資料源本身的重複，不是兩則獨立訊號。
+    這種重複_dedupe_by_execution_window(用執行窗口當key)抓不到，因為09:00是分界點，
+    08:10發布算當天執行、10:10發布算隔天執行，兩篇重複新聞剛好落在不同執行窗口，於是
+    被當成兩個獨立的合格候選，entryIdx先被第一篇設到「當天」，馬上又被第二篇(其實是
+    同一則新聞的重複發布)蓋成「隔天」——單一個股1天的持有天數差異，經過max_hold_days
+    週期性出場/進場的排名資格競爭一路累積下去，是驗證期/測試期超額報酬跟同事對不齊的
+    根因。我們自己的Supabase資料庫沒有同事那套duplicate_signature欄位，這裡用內容特徵
+    (股票+日期+方向+舊目標價+新目標價+分析師數)重建同樣的去重邏輯：同一組特徵只留發布
+    時間最早的一篇，其餘視為重複新聞直接丟棄。"""
+    events = events.copy()
+    events["_sig"] = (events["ticker"].astype(str) + "|" + events["date"].dt.strftime("%Y-%m-%d") + "|"
+                       + events["direction"].astype(str) + "|" + events["prev_target"].astype(str) + "|"
+                       + events["new_target"].astype(str) + "|" + events["analyst_count"].astype(str))
+    events = events.sort_values("news_time_taipei", na_position="last")
+    events = events[~events.duplicated(subset=["_sig"], keep="first")]
+    return events.drop(columns=["_sig"]).sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
 def load_data():
     r = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle", headers=SB_HEADERS, json={}, timeout=60)
     r.raise_for_status()
@@ -137,6 +158,7 @@ def load_data():
 
     events = pd.DataFrame(events_raw)
     events["date"] = pd.to_datetime(events["date"])
+    events = _dedupe_by_content_signature(events)
     return stock_price, stock_price_open, taiex, taiex_open, calendar, events, stock_price_raw
 
 

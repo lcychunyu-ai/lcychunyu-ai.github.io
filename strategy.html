@@ -581,6 +581,35 @@ function resolveExecutionIdx(dateStr, timeStr) {
   return nextTradingDayIdx(dateStr);
 }
 
+// 2026-07-29新增：內容重複去重(對照同事articles表的duplicate_signature/duplicate_rank
+// 欄位)——同一檔股票、同一天，同一篇新聞被系統重複發布兩次(例如08:10跟10:10各發一篇、
+// old_target/new_target/analyst_count完全相同)，是資料源本身的重複，不是兩則獨立訊號。
+// 這個問題dedupeByExecutionWindow(用執行窗口idx當key)抓不到——因為09:00是分界點，
+// 08:10發布的算當天執行、10:10發布的算隔天執行，兩篇重複新聞剛好落在不同執行窗口，
+// 於是被當成兩個獨立的合格候選：entryIdx先被第一篇設到「當天」，馬上又被第二篇(其實
+// 是同一則新聞的重複發布)蓋成「隔天」，導致這檔股票的持有天數少算一天，maxHoldDays
+// 出場時間也跟著晚一天——單一個股1天的差異，經過maxHoldDays週期性出場/進場的排名
+// 資格競爭一路累積下去，是驗證期/測試期超額報酬跟同事對不齊的根因(訓練期0.32pp、
+// 驗證期1.43pp、測試期2.42pp的落差正好隨時間累積放大，指向這種會複利的單點分歧，
+// 不是隨機雜訊)。我們自己的Supabase資料庫沒有同事那套duplicate_signature欄位，
+// 這裡用內容特徵(股票+日期+方向+舊目標價+新目標價+分析師數)重建同樣的去重邏輯：
+// 同一組特徵只留發布時間最早的一篇，其餘視為重複新聞直接丟棄(不進任何後續流程)。
+function dedupeByContentSignature(events) {
+  const groups = new Map();
+  for (const e of events) {
+    const key = `${e.ticker}|${e.date}|${e.direction}|${e.prev_target}|${e.new_target}|${e.analyst_count}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  const out = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) { out.push(group[0]); continue; }
+    const earliest = group.slice().sort((a, b) => (a.news_time_taipei || '99:99:99').localeCompare(b.news_time_taipei || '99:99:99'))[0];
+    out.push(earliest);
+  }
+  return out;
+}
+
 // 2026-07-28新增：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行時間
 // 窗口，不管UP還是DOWN，只留發布時間最晚的那篇。原本UP/DOWN是兩條獨立處理的資料流
 // (UP進prepareEvents決定進場候選、DOWN進buildDownByDate決定出場)，完全沒有互相去重——
@@ -827,9 +856,10 @@ async function loadAll() {
     s.closes.push(row.close);
   }
 
-  RAW_EVENTS = events;
-  EV_UP = prepareEvents(events);
-  DOWN_BY_DATE = buildDownByDate(events);
+  const dedupedEvents = dedupeByContentSignature(events);
+  RAW_EVENTS = dedupedEvents;
+  EV_UP = prepareEvents(dedupedEvents);
+  DOWN_BY_DATE = buildDownByDate(dedupedEvents);
 
   document.getElementById('updated-at').textContent = DATES[DATES.length - 1];
 }
