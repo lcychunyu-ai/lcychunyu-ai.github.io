@@ -2269,7 +2269,7 @@ function sensitivityAnalyze(cfg) {
 function buildSensitivityChartSvg(key, cfg, an) {
   const pts = cfg.points;
   const fmt = SENSITIVITY_SWEEPS[key].fmt;
-  const W = 480, H = 220, padL = 50, padR = 16, padT = 16, padB = 32;
+  const W = 480, H = 230, padL = 50, padR = 16, padT = 30, padB = 32;
   const yVals = pts.map(p => p.summary.excessReturnPct);
   let yMin = Math.min(...yVals, 0), yMax = Math.max(...yVals, 0);
   const pad = (yMax - yMin) * 0.14 || 5;
@@ -2279,29 +2279,67 @@ function buildSensitivityChartSvg(key, cfg, an) {
   const zeroY = y(0);
 
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), inkDim = cssVar('--ink-dim'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel'), panel2 = cssVar('--panel-2');
+  const gridColor = cssVar('--grid'), inkDim = cssVar('--ink-dim'), ink = cssVar('--ink'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel'), panel2 = cssVar('--panel-2');
 
   // 2026-07-29修正：原本只畫2-3條「均分」的格線，0%這條中軸剛好常常沒被畫到格線上，
   // 只剩一條沒有數字的虛線，使用者完全看不出來那條線代表0%。改成：上下各挑一個乾淨的
   // 格線(最高點/最低點附近)，中軸(0%)一定畫、一定標數字、字體加粗加大，跟其他格線
-  // 明顯不同，一眼就能認出「這條線=打平大盤」。
+  // 明顯不同，一眼就能認出「這條線=打平大盤」。軸線文字改用--ink-dim(不是--ink-faint)，
+  // 深色主題下--ink-faint太暗，X軸座標幾乎看不見。
   let gridLines = '';
   const topLabel = yMax, bottomLabel = yMin;
   [topLabel, bottomLabel].forEach(gv => {
     const gy = y(gv);
     gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
-    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="10.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="10.5" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
   });
   gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkDim}" stroke-width="1.4" stroke-dasharray="4,3"/>`;
   gridLines += `<rect x="${padL - 44}" y="${(zeroY - 8).toFixed(1)}" width="40" height="16" rx="4" fill="${panel2}"/>`;
   gridLines += `<text x="${padL - 8}" y="${(zeroY + 3.5).toFixed(1)}" font-size="11" font-weight="700" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">0%</text>`;
 
-  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
+  // 2026-07-29新增：專業投資人真正在意的不是曲線平不平滑，是「從哪一個節點開始惡化
+  // 速度突然加快」——找出整條曲線裡「相鄰兩點斜率(每一格的超額報酬變化量)最大」的
+  // 那一段，用警示色+粗線特別標出來，並在該段起點標上「轉折點」，直接回答「過了這裡
+  // 就開始不妙」，不是只把整條線畫成同一個顏色讓使用者自己肉眼比較每一段的陡峭程度。
+  let steepIdx = 0, steepDelta = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const d = Math.abs(pts[i + 1].summary.excessReturnPct - pts[i].summary.excessReturnPct);
+    if (d > steepDelta) { steepDelta = d; steepIdx = i; }
+  }
+  const totalRange = Math.max(...yVals) - Math.min(...yVals) || 1;
+  const showBreakpoint = steepDelta > 15 && steepDelta > totalRange * 0.3;
+
+  const segPath = (i) => `M${x(i).toFixed(1)},${y(pts[i].summary.excessReturnPct).toFixed(1)} L${x(i + 1).toFixed(1)},${y(pts[i + 1].summary.excessReturnPct).toFixed(1)}`;
+  const normalSegs = pts.slice(0, -1).map((p, i) => i === steepIdx && showBreakpoint ? '' : segPath(i)).filter(Boolean).join(' ');
+
   const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+
+  // 轉折點的顏色要跟著方向走、不能固定用一種顏色——這個網站紅=漲/綠=跌是台股慣例，
+  // 轉折點如果是「超額報酬變好」(上升)該用漲色，「變差」(下降)才用跌色，固定用同一種
+  // 顏色會讓「▲上升」卻標成「跌色」，跟其他地方的顏色語意自相矛盾。
+  const breakIsFalling = showBreakpoint && pts[steepIdx + 1].summary.excessReturnPct < pts[steepIdx].summary.excessReturnPct;
+  const breakColor = breakIsFalling ? downColor : upColor;
+
+  let breakpointHtml = '';
+  if (showBreakpoint) {
+    const bx1 = x(steepIdx), bx2 = x(steepIdx + 1);
+    const by1 = y(pts[steepIdx].summary.excessReturnPct), by2 = y(pts[steepIdx + 1].summary.excessReturnPct);
+    const dir = breakIsFalling ? '▼' : '▲';
+    const midX = (bx1 + bx2) / 2;
+    const labelY = Math.min(by1, by2) - 10;
+    breakpointHtml = `
+      <rect x="${bx1.toFixed(1)}" y="${padT}" width="${(bx2 - bx1).toFixed(1)}" height="${H - padT - padB}" fill="${breakColor}" opacity="0.12"/>
+      <path d="${segPath(steepIdx)}" fill="none" stroke="${breakColor}" stroke-width="3.6" stroke-linejoin="round"/>
+      <line x1="${bx1.toFixed(1)}" y1="${padT}" x2="${bx1.toFixed(1)}" y2="${H - padB}" stroke="${breakColor}" stroke-width="1" stroke-dasharray="2,2" opacity="0.6"/>
+      <text x="${midX.toFixed(1)}" y="${Math.max(labelY, padT + 10).toFixed(1)}" font-size="10.5" font-weight="700" fill="${breakColor}" text-anchor="middle">${dir} 轉折點：每格${steepDelta.toFixed(0)}pp</text>
+      <text x="${bx1.toFixed(1)}" y="${H - padB + 28}" font-size="9.5" font-weight="700" fill="${breakColor}" text-anchor="middle">↑從這裡開始劇烈變化</text>`;
+  }
 
   const xLabels = pts.map((p, i) => {
     const isBase = i === an.baseIdx;
-    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase ? 11 : 10}" font-weight="${isBase ? 700 : 400}" fill="${isBase ? accent : inkFaint}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
+    const isBreak = showBreakpoint && i === steepIdx;
+    const color = isBase ? accent : isBreak ? breakColor : inkDim;
+    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase || isBreak ? 11 : 10}" font-weight="${isBase || isBreak ? 700 : 500}" fill="${color}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
   }).join('');
 
   // 目前設定值除了圓點放大，額外加一條垂直參考線+「目前」標籤貼在圖表最上緣，
@@ -2309,12 +2347,14 @@ function buildSensitivityChartSvg(key, cfg, an) {
   const baseX = x(an.baseIdx);
   const currentTag = `
     <line x1="${baseX.toFixed(1)}" y1="${padT}" x2="${baseX.toFixed(1)}" y2="${H - padB}" stroke="${accent}" stroke-width="1" stroke-dasharray="2,3" opacity="0.55"/>
-    <rect x="${(baseX - 16).toFixed(1)}" y="1" width="32" height="14" rx="4" fill="${accent}"/>
-    <text x="${baseX.toFixed(1)}" y="11" font-size="9.5" font-weight="700" fill="${panelBg}" text-anchor="middle">目前</text>`;
+    <rect x="${(baseX - 16).toFixed(1)}" y="${padT - 16}" width="32" height="14" rx="4" fill="${accent}"/>
+    <text x="${baseX.toFixed(1)}" y="${padT - 6}" font-size="9.5" font-weight="700" fill="${panelBg}" text-anchor="middle">目前</text>`;
 
   const dots = pts.map((p, i) => {
     const isBase = i === an.baseIdx;
-    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : 3}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
+    const isBreak = showBreakpoint && (i === steepIdx || i === steepIdx + 1);
+    const stroke = isBase ? accent : isBreak ? breakColor : accent;
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : isBreak ? 4 : 3}" fill="${isBase ? accent : panelBg}" stroke="${stroke}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
   }).join('');
 
   const svgId = 'sv' + Math.random().toString(36).slice(2, 9);
@@ -2323,7 +2363,8 @@ function buildSensitivityChartSvg(key, cfg, an) {
     ${gridLines}
     <path d="${areaPath}" fill="${upColor}" opacity="0.32" clip-path="url(#${svgId}-pos)"/>
     <path d="${areaPath}" fill="${downColor}" opacity="0.32" clip-path="url(#${svgId}-neg)"/>
-    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="${normalSegs}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
+    ${breakpointHtml}
     ${dots}
     ${currentTag}
     ${xLabels}
