@@ -524,6 +524,16 @@
           <div id="strict-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
         </section>
 
+        <!-- ===== EXTENDED OPTIMIZATION (全模型搜尋，含equal/調升幅度加權) ===== -->
+        <section class="section-card accent-safe" id="extended-optimizer-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Extended Optimization (All 4 Models)</span><h3>全模型搜尋</h3></div>
+            <button class="btn safe small" id="extended-search-btn">執行全模型搜尋</button>
+          </div>
+          <p class="section-sub">上面「參數自動最佳化」跟同事的優化器一樣只測試原始綜合分數/第二代多因子——這裡額外納入等權、調升幅度加權，384組候選(是同事192組的兩倍)，同樣兩段walk-forward流程。這是我們自己的延伸搜尋，不是同事192組候選的原始版本，兩者分開看。</p>
+          <div id="extended-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋(384組候選，比上面的搜尋耗時更久)。</div></div>
+        </section>
+
         <!-- ===== IN-SAMPLE EXPLORATION ===== -->
         <section class="section-card accent-caution" id="explorer-section">
           <div class="section-head">
@@ -2079,7 +2089,31 @@ function buildOptimizerCandidates(baseParams) {
   return rows;
 }
 
-async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
+// 2026-07-29新增：「全模型搜尋」專用的延伸候選網格——跟buildOptimizerCandidates用一樣
+// 的門檻/持有天數/持股數網格，唯一差異是配置方式多開放equal(等權)、by_upgrade(調升
+// 幅度加權)這兩個同事自己的優化器從來不測試的選項(他optimizer.js的buildCandidates()
+// 寫死allocation∈['score','enhanced'])。這是我們自己的延伸搜尋，候選數變成384組
+// (3×2×2×4×2×4)，不再是跟同事192組完全對上的原始版本，所以獨立成另一個區塊，
+// 不動原本已經驗證過候選數精確吻合的「參數自動最佳化」。
+function buildExtendedOptimizerCandidates(baseParams) {
+  const rows = [];
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const sizingMode of ['equal', 'by_upgrade', 'composite', 'enhanced']) {
+          for (const maxHoldDays of [10, 20]) {
+            for (const maxPositions of [0, 5, 10, 20]) {
+              rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+            }
+          }
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress, candidateBuilder) {
   // 2026-07-28修正：每一段(訓練/驗證/測試)都用buildFoldEvUp()複製同事140天緩衝的
   // 「二分搜尋鎖底」行為(見computeRevisionHistory的詳細說明)。第一次嘗試(單純把緩衝
   // 之前的文章直接濾掉不用)方向錯誤、實測讓驗證期落差惡化，根因是同事的二分搜尋沒有
@@ -2090,7 +2124,10 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress) {
   const evUp2025 = buildFoldEvUp('2025-01-01');
   const evUp2026 = buildFoldEvUp('2026-01-01');
 
-  const candidates = buildOptimizerCandidates(baseParams);
+  // 2026-07-29新增candidateBuilder參數：預設用buildOptimizerCandidates(跟同事192組候選
+  // 完全對上的原始網格)，但也讓runExtendedSearchAndRender()能傳入含equal/調升幅度加權
+  // 的延伸網格，兩邊共用同一套兩段walk-forward選參邏輯，不用重寫一次。
+  const candidates = (candidateBuilder || buildOptimizerCandidates)(baseParams);
   const fold1 = [];
   for (let i = 0; i < candidates.length; i++) {
     const p = candidates[i];
@@ -2230,6 +2267,109 @@ async function runStrictSearchAndRender() {
 }
 
 document.getElementById('strict-search-btn').addEventListener('click', () => { runStrictSearchAndRender(); });
+
+// 2026-07-29新增：全模型搜尋——跟runStrictSearchAndRender()幾乎一樣的兩段walk-forward
+// 流程，唯一差異是candidateBuilder換成buildExtendedOptimizerCandidates(多開放equal/
+// 調升幅度加權兩種配置方式)，DOM id/文案都獨立，不會跟「參數自動最佳化」互相覆蓋。
+// 384組候選(是同事192組的兩倍)，不自動在頁面載入時跑，避免拖慢初始載入時間，改成
+// 手動點按鈕才觸發。
+let LAST_BEST_EXCESS_EXT = null;
+async function runExtendedSearchAndRender() {
+  const btn = document.getElementById('extended-search-btn');
+  const base = readParams();
+  const testEnd = document.getElementById('p-end').value;
+  const out = document.getElementById('extended-result');
+  btn.disabled = true;
+  const totalCandidates = buildExtendedOptimizerCandidates(base).length;
+  renderSearchProgress(out, 0, totalCandidates + 24, '搜尋中');
+  const result = await runTwoFoldOptimizationAsync(base, testEnd, (done, total, stage) => renderSearchProgress(out, done, total, stage), buildExtendedOptimizerCandidates);
+  btn.disabled = false;
+
+  const { selected, test, full } = result;
+  const trainSummary = selected.train, validSummary = selected.validation;
+  LAST_BEST_EXCESS_EXT = { excess: full ? full.excessReturnPct : null, sub: `全模型搜尋選定參數套用全期間` };
+
+  const trainExcess = trainSummary.excessReturnPct;
+  const validExcess = validSummary ? validSummary.excessReturnPct : null;
+  const isOverfit = validExcess == null || validExcess < 0 || (trainExcess > 0 && validExcess < trainExcess * 0.5);
+  const badgeClass = isOverfit ? 'caution' : 'safe';
+  const badgeText = isOverfit ? '驗證期表現衰退，疑似過度配適' : '樣本外驗證通過';
+
+  out.innerHTML = '';
+  const recGrid = document.createElement('div');
+  recGrid.className = 'recommend-grid';
+  recGrid.innerHTML = `
+    <div class="recommend-card">
+      <h4>全模型兩段walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${trainSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(trainSummary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(trainSummary.totalTaiexReturnPct)} · 超額 ${fmtPct(trainSummary.excessReturnPct)}</div></div>
+        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${validSummary && validSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(validSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(validSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(validSummary?.excessReturnPct)}</div></div>
+        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value ${test && test.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(test?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(test?.totalTaiexReturnPct)} · 超額 ${fmtPct(test?.excessReturnPct)}</div></div>
+      </div>
+      <div class="param-summary-line">${paramSummaryLabel(selected.params)}</div>
+      <div class="recommend-actions">
+        <button class="btn secondary small" id="btn-rec-test-ext">只看 2026 最終測試</button>
+        <button class="btn secondary small" id="btn-rec-full-ext">套用全期間</button>
+      </div>
+    </div>`;
+  out.appendChild(recGrid);
+
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'disclaimer-bar';
+  disclaimer.textContent = isOverfit
+    ? `${totalCandidates}組候選(含equal/調升幅度加權，同事優化器不測試這兩種)經兩段walk-forward選出，在驗證期(2025)表現明顯轉弱，代表很可能只是配適到訓練期的雜訊，不建議直接採用。2026保留期只揭露一次結果，不會回頭影響推薦參數。`
+    : `${totalCandidates}組候選(含equal/調升幅度加權，同事優化器不測試這兩種，是我們自己的延伸搜尋，不是同事192組候選的原始版本)經兩段walk-forward(2023訓練→2024驗證，再2023-2024訓練→2025驗證)綜合排名選出。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。`;
+  out.appendChild(disclaimer);
+
+  const trainTableWrap = document.createElement('details');
+  trainTableWrap.className = 'table-toggle';
+  trainTableWrap.style.marginTop = '16px';
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = `顯示第二輪前24名候選(依選定分數排序)`;
+  trainTableWrap.appendChild(summaryEl);
+  const trainTable = document.createElement('div');
+  trainTable.style.marginTop = '8px';
+  trainTableWrap.appendChild(trainTable);
+  renderGridTable(trainTable, result.shortlist);
+  out.appendChild(trainTableWrap);
+
+  const stabilityWrap = document.createElement('div');
+  stabilityWrap.style.marginTop = '16px';
+  stabilityWrap.innerHTML = `<p style="font-size:12px; color:var(--ink-faint); margin-bottom:8px;">正在檢查這組推薦參數的穩定度…</p>`;
+  out.appendChild(stabilityWrap);
+  runSensitivityAnalysisAsync(selected.params, '2023-01-01', testEnd).then(({ baseRun: sBaseRun, results: sResults }) => {
+    const ranked = Object.entries(sResults).map(([k, cfg]) => [k, sensitivityAnalyze(cfg)]).sort((a, b) => b[1].worstNeighborDrop - a[1].worstNeighborDrop);
+    const mostFragile = ranked[0];
+    const isFragile = mostFragile[1].worstNeighborDrop > 40;
+    stabilityWrap.innerHTML = `
+      <div class="disclaimer-bar" style="${isFragile ? '' : 'background:var(--safe-dim); color:var(--safe-ink);'}">
+        <b>${isFragile ? '⚠ 穩定度檢查：' : '✓ 穩定度檢查：'}</b>
+        「${SENSITIVITY_SWEEPS[mostFragile[0]].label}」鄰近設定落差 ${mostFragile[1].worstNeighborDrop.toFixed(0)}pp
+        ${isFragile ? '——這組推薦參數對這個參數很敏感，可能是局部尖峰，套用前建議先看完整分析' : '，在測試範圍內相對穩健，不是站在懸崖邊的局部尖峰'}。
+      </div>
+      <details class="table-toggle" style="margin-top:8px;"><summary>顯示完整穩定度分析(6個參數)</summary><div class="stability-detail" style="margin-top:10px;"></div></details>`;
+    renderSensitivityResult(stabilityWrap.querySelector('.stability-detail'), sBaseRun, sResults);
+  });
+
+  document.getElementById('btn-rec-full-ext').onclick = () => {
+    applyParamsToForm(selected.params);
+    setDateField('start', '2023-01-01');
+    setDateField('end', testEnd);
+    runAndRenderManual(LAST_BEST_EXCESS_EXT);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  document.getElementById('btn-rec-test-ext').onclick = () => {
+    applyParamsToForm(selected.params);
+    setDateField('start', '2026-01-01');
+    setDateField('end', testEnd);
+    runAndRenderManual(LAST_BEST_EXCESS_EXT);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  return { selected, testEnd, isOverfit };
+}
+
+document.getElementById('extended-search-btn').addEventListener('click', () => { runExtendedSearchAndRender(); });
 
 // ----------------------------------------------------------------------------
 // In-Sample Exploration：選參流程+候選產生方式完全對照同事explorer.js的exploreExecution()
