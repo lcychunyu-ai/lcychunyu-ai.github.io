@@ -274,6 +274,16 @@
   }
   :root[data-theme="dark"] .disclaimer-bar, @media (prefers-color-scheme: dark) { }
 
+  .sensitivity-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; font-size: 11.5px; color: var(--ink-dim);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
+  }
+  .sensitivity-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .lg-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .lg-swatch { width: 12px; height: 9px; border-radius: 2px; display: inline-block; flex-shrink: 0; opacity: 0.55; }
+  .lg-line { width: 16px; height: 0; border-top: 1.4px dashed var(--ink-dim); display: inline-block; flex-shrink: 0; }
+  .lg-tag { font-size: 9.5px; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 4px; padding: 1px 6px; }
+
   .sensitivity-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
   .sensitivity-summary-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .sensitivity-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
@@ -2259,34 +2269,52 @@ function sensitivityAnalyze(cfg) {
 function buildSensitivityChartSvg(key, cfg, an) {
   const pts = cfg.points;
   const fmt = SENSITIVITY_SWEEPS[key].fmt;
-  const W = 480, H = 190, padL = 44, padR = 14, padT = 12, padB = 26;
+  const W = 480, H = 220, padL = 50, padR = 16, padT = 16, padB = 32;
   const yVals = pts.map(p => p.summary.excessReturnPct);
   let yMin = Math.min(...yVals, 0), yMax = Math.max(...yVals, 0);
-  const pad = (yMax - yMin) * 0.12 || 5;
+  const pad = (yMax - yMin) * 0.14 || 5;
   yMin -= pad; yMax += pad;
   const x = i => padL + (i / Math.max(pts.length - 1, 1)) * (W - padL - padR);
   const y = v => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
   const zeroY = y(0);
 
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel');
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), inkDim = cssVar('--ink-dim'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel'), panel2 = cssVar('--panel-2');
 
+  // 2026-07-29修正：原本只畫2-3條「均分」的格線，0%這條中軸剛好常常沒被畫到格線上，
+  // 只剩一條沒有數字的虛線，使用者完全看不出來那條線代表0%。改成：上下各挑一個乾淨的
+  // 格線(最高點/最低點附近)，中軸(0%)一定畫、一定標數字、字體加粗加大，跟其他格線
+  // 明顯不同，一眼就能認出「這條線=打平大盤」。
   let gridLines = '';
-  for (let i = 0; i <= 2; i++) {
-    const gv = yMin + (yMax - yMin) * (i / 2);
+  const topLabel = yMax, bottomLabel = yMin;
+  [topLabel, bottomLabel].forEach(gv => {
     const gy = y(gv);
     gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
-    gridLines += `<text x="${padL - 6}" y="${(gy + 3.2).toFixed(1)}" font-size="9" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
-  }
-  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1" stroke-dasharray="3,3"/>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="10.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  });
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkDim}" stroke-width="1.4" stroke-dasharray="4,3"/>`;
+  gridLines += `<rect x="${padL - 44}" y="${(zeroY - 8).toFixed(1)}" width="40" height="16" rx="4" fill="${panel2}"/>`;
+  gridLines += `<text x="${padL - 8}" y="${(zeroY + 3.5).toFixed(1)}" font-size="11" font-weight="700" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">0%</text>`;
 
   const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
   const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
 
-  const xLabels = pts.map((p, i) => `<text x="${x(i).toFixed(1)}" y="${H - padB + 14}" font-size="9" fill="${inkFaint}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`).join('');
+  const xLabels = pts.map((p, i) => {
+    const isBase = i === an.baseIdx;
+    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase ? 11 : 10}" font-weight="${isBase ? 700 : 400}" fill="${isBase ? accent : inkFaint}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
+  }).join('');
+
+  // 目前設定值除了圓點放大，額外加一條垂直參考線+「目前」標籤貼在圖表最上緣，
+  // 不是只靠一個小圓點孤零零地藏在線上，讓人一眼找不到「我現在在哪裡」。
+  const baseX = x(an.baseIdx);
+  const currentTag = `
+    <line x1="${baseX.toFixed(1)}" y1="${padT}" x2="${baseX.toFixed(1)}" y2="${H - padB}" stroke="${accent}" stroke-width="1" stroke-dasharray="2,3" opacity="0.55"/>
+    <rect x="${(baseX - 16).toFixed(1)}" y="1" width="32" height="14" rx="4" fill="${accent}"/>
+    <text x="${baseX.toFixed(1)}" y="11" font-size="9.5" font-weight="700" fill="${panelBg}" text-anchor="middle">目前</text>`;
+
   const dots = pts.map((p, i) => {
     const isBase = i === an.baseIdx;
-    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 4.5 : 2.6}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2 : 1.4}"/>`;
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : 3}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
   }).join('');
 
   const svgId = 'sv' + Math.random().toString(36).slice(2, 9);
@@ -2295,8 +2323,9 @@ function buildSensitivityChartSvg(key, cfg, an) {
     ${gridLines}
     <path d="${areaPath}" fill="${upColor}" opacity="0.16" clip-path="url(#${svgId}-pos)"/>
     <path d="${areaPath}" fill="${downColor}" opacity="0.16" clip-path="url(#${svgId}-neg)"/>
-    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
     ${dots}
+    ${currentTag}
     ${xLabels}
   </svg>` };
 }
@@ -2334,8 +2363,21 @@ function renderSensitivityResult(container, baseRun, results) {
     </div>`;
   }).join('');
 
-  container.innerHTML = `${summaryHtml}<div class="sensitivity-grid">${panelsHtml}</div>
-    <div class="disclaimer-bar">★標記為目前設定值。「鄰近設定落差」= 基準值往左右各移動一格後，超額報酬變動較大的那一側；數字越大代表這個參數在目前設定附近變化越劇烈，過擬合風險越高。</div>`;
+  // 2026-07-29新增：每張小圖都沒有圖例，橘點/虛線/粉綠底色代表什麼完全要用戶自己猜——
+  // 加一條固定在圖表上方的圖例，用文字(不是只靠顏色，紅綠對很多人來說不好分辨、
+  // 而且這個網站的紅=漲/綠=跌是台股慣例、跟國際慣例相反，不能假設看得懂)講清楚每個
+  // 視覺元素代表什麼。
+  const legendHtml = `
+    <div class="sensitivity-legend">
+      <span><span class="lg-dot" style="background:var(--accent);"></span>橘線＝超額報酬隨參數變化的軌跡</span>
+      <span><span class="lg-tag">目前</span>＝左側面板現在設定的值</span>
+      <span><span class="lg-swatch" style="background:var(--up);"></span>贏大盤區間（超額報酬 &gt; 0%）</span>
+      <span><span class="lg-swatch" style="background:var(--down);"></span>輸大盤區間（超額報酬 &lt; 0%）</span>
+      <span><span class="lg-line"></span>0% 中軸＝跟大盤打平的分界線</span>
+    </div>`;
+
+  container.innerHTML = `${summaryHtml}${legendHtml}<div class="sensitivity-grid">${panelsHtml}</div>
+    <div class="disclaimer-bar">「鄰近設定落差」= 目前設定值往左右各移動一格(圖上橘色虛線位置往鄰近的點)後，超額報酬變動較大的那一側；數字越大代表這個參數在目前設定附近變化越劇烈，過擬合風險越高。</div>`;
 }
 
 document.getElementById('sensitivity-btn').addEventListener('click', async () => {
