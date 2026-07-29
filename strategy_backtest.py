@@ -376,7 +376,7 @@ class StrategyParams:
     max_positions: int = 10                 # 0=不限
     max_portfolio_exposure: float = 1.0      # 使用者新增：投組總曝險上限，1.0=可滿倉
 
-    sizing_mode: Literal["equal", "by_upgrade", "composite", "multifactor", "enhanced"] = "equal"
+    sizing_mode: Literal["equal", "by_upgrade", "composite", "enhanced"] = "equal"
     composite_alpha: float = 1.0
     composite_beta: float = 1.0
     composite_gamma: float = 1.0
@@ -422,8 +422,6 @@ def score_candidates(cands: pd.DataFrame, p: StrategyParams, stock_price: dict, 
             * cands["analyst_count"].clip(lower=1) ** p.composite_beta
             * cands["upside_used"].clip(lower=0.001) ** p.composite_gamma
         )
-    elif p.sizing_mode == "multifactor":
-        base = _multifactor_score(cands, stock_price, calendar)
     elif p.sizing_mode == "enhanced":
         base = _enhanced_score(cands)
     else:
@@ -437,39 +435,6 @@ def score_candidates(cands: pd.DataFrame, p: StrategyParams, stock_price: dict, 
         # 低於平均：維持base不變(不加碼也不排除)，這裡的np.where已經隱含這個行為
 
     return base.clip(lower=0)
-
-
-def _multifactor_score(cands: pd.DataFrame, stock_price: dict, calendar: pd.DatetimeIndex) -> pd.Series:
-    """PDF第二代多因子：異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率。"""
-    z_change = (cands["target_change_pct"] - cands["hist_avg_change"]) / cands["hist_std_change"].replace(0, np.nan)
-    z_change = z_change.fillna(0).clip(lower=-3, upper=3) + 3.1  # 平移成正值才能相乘
-
-    log_analyst = np.log1p(cands["analyst_count"])
-    upside = cands["upside_used"].clip(lower=0.001)
-    streak_factor = 1.0 + cands["streak"].clip(upper=10) * 0.05
-
-    mom = []
-    vol = []
-    for _, row in cands.iterrows():
-        ser = stock_price.get(row["ticker"])
-        d = row["entry_date"]
-        if ser is None or d not in calendar:
-            mom.append(0.0)
-            vol.append(np.nan)
-            continue
-        pos = calendar.get_loc(d)
-        window = ser.iloc[max(0, pos - 20):pos]
-        rets = window.pct_change(fill_method=None).dropna()
-        mom.append(rets.sum() if len(rets) else 0.0)
-        vol.append(rets.std() if len(rets) > 1 else np.nan)
-    mom = pd.Series(mom, index=cands.index)
-    vol = pd.Series(vol, index=cands.index).fillna(pd.Series(vol, index=cands.index).median())
-    vol = vol.replace(0, vol[vol > 0].min() if (vol > 0).any() else 0.01)
-    mom_factor = mom - mom.median()  # 相對動能：相對同一批候選的中位數，不是跟大盤比(簡化版)
-    mom_factor = mom_factor.clip(lower=-0.5) + 0.51  # 平移成正值
-
-    score = z_change * log_analyst * upside * mom_factor * streak_factor / vol
-    return score.clip(lower=0)
 
 
 def _enhanced_score(cands: pd.DataFrame) -> pd.Series:
@@ -650,9 +615,8 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         if day in entries_by_date.groups:
             todays = entries_by_date.get_group(day)
             if len(todays) > 0:
-                # 分數只算合格的那些——multifactor這類看「同一批候選相對排名」的算法，
-                # 分母/中位數統計不該被不合格的候選(它們不會真的進場，只用來更新目標價)
-                # 汙染，維持跟filter_candidates還在整批過濾時同樣的統計母體。
+                # 分數只算合格的那些，不合格的候選(它們不會真的進場，只用來更新目標價)
+                # 不該進入評分計算。
                 qualifying = todays[todays["qualifies"]]
                 if len(qualifying) > 0:
                     scores = score_candidates(qualifying, p, stock_price, calendar)
@@ -862,7 +826,7 @@ if __name__ == "__main__":
         print(f"{name}: {res['summary']}")
 
     print("\n=== sizing_mode / avg_rule 開關組合檢查(全期間2023-2026) ===")
-    for sizing in ["equal", "by_upgrade", "composite", "multifactor"]:
+    for sizing in ["equal", "by_upgrade", "composite", "enhanced"]:
         for avg_rule in ["none", "tier3"]:
             p = StrategyParams(sizing_mode=sizing, avg_rule=avg_rule)
             res = run_backtest(p, ev, stock_price, taiex, calendar, "2023-01-01", "2026-12-31", down_lookup=down_lookup,

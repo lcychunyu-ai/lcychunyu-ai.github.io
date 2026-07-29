@@ -349,30 +349,29 @@
           <div class="param-field" style="margin-bottom:0;">
             <label>配置方式</label>
             <select id="p-sizing">
-              <option value="enhanced" selected>進階多因子（推薦，含動能與波動率調整）</option>
-              <option value="multifactor">多因子（不含大盤相對動能）</option>
-              <option value="composite">綜合分數（調升幅度／分析師數／上漲空間加權）</option>
+              <option value="equal">平均配置／等權配置</option>
               <option value="by_upgrade">調升幅度加權</option>
-              <option value="equal">等權</option>
+              <option value="composite">原始綜合分數</option>
+              <option value="enhanced" selected>第二代多因子分數（推薦）</option>
             </select>
           </div>
 
           <details class="explainer-toggle">
             <summary>配置方式怎麼計算？</summary>
             <div class="explainer" style="margin-top:10px;">
-              <p><b>進階多因子（推薦）</b></p>
-              <span class="formula" style="margin-bottom:0;">分數 = 異常調升(clip 0.25~4) × log(1+分析師) × 上漲空間(clip 1%~60%) × 相對大盤動能(clip 0.25~2) × 連續調升加成 ÷ 年化波動率(下限10%)</span>
-              <p style="margin:6px 0 0; font-size:11px;">異常調升：相對該股過去365天調升幅度中位數；相對動能：進場前20個交易日報酬，跟加權指數同期比較（不是跟同批候選比）；連續調升：過去60天內調升次數；波動率：年化。</p>
-              <p style="margin-top:8px;"><b>多因子</b></p>
-              <span class="formula" style="margin-bottom:0;">分數 = 異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</span>
-              <p style="margin:6px 0 0; font-size:11px;">異常調升：本次調升幅度相對該股歷史平均的標準化程度；相對動能：進場前20個交易日報酬，跟同一批候選的中位數比；波動率：同一段期間的日報酬標準差，缺值用同批中位數補。</p>
-              <p style="margin-top:8px;"><b>綜合分數</b></p>
-              <span class="formula">分數 = 調升幅度^α × 分析師數^β × 上漲空間^γ</span>
-              <p style="margin:6px 0 0; font-size:11px;">分數除以總分得到權重，再套用單檔上限與最大持股數。</p>
-              <p><b>調升幅度加權</b></p>
-              <span class="formula">權重 ∝ 本次目標價調升%</span>
-              <p><b>等權</b></p>
-              <span class="formula" style="margin-bottom:0;">每檔權重 = 1 ÷ 符合條件的股票數</span>
+              <p><b>平均配置／等權配置</b></p>
+              <span class="formula">S_i = 1，w_i = 1 / N</span>
+              <p style="margin:6px 0 0; font-size:11px;">不考慮調升幅度、分析師數或上漲空間，通過門檻的股票地位完全相同。</p>
+              <p style="margin-top:8px;"><b>調升幅度加權</b></p>
+              <span class="formula">S_i = R_i，w_i = R_i / ΣR_j</span>
+              <p style="margin:6px 0 0; font-size:11px;">R_i = 新目標價/舊目標價 − 1。假設調升幅度越大，訊號越強，投入越多。</p>
+              <p style="margin-top:8px;"><b>原始綜合分數</b></p>
+              <span class="formula">S_i = R_i^α × A_i^β × U_i^γ（預設 α=1, β=0.5, γ=1）</span>
+              <p style="margin:6px 0 0; font-size:11px;">A_i為分析師人數，U_i=新目標價/訊號執行日前一交易日收盤價−1。分析師數開根號(β=0.5)是為了讓人數增加仍加分，但避免大型權值股單靠分析師多就主導排名。</p>
+              <p style="margin-top:8px;"><b>第二代多因子分數（推薦）</b></p>
+              <span class="formula" style="margin-bottom:0;">S_i = AR_i × ln(1+A_i) × CU_i × RM_i × RB_i ÷ VOL_i</span>
+              <p style="margin:6px 0 0; font-size:11px;">AR_i異常調升：|R_i|相對該股過去一年調升幅度中位數，clip在0.25~4；CU_i上漲空間：clip在1%~60%；RM_i相對動能：個股20日報酬減大盤20日報酬，clip在0.25~2(即1+相對動能)；RB_i連續上修：1+0.15×過去60日內額外調升次數；VOL_i波動率：近20日報酬年化標準差，下限10%。</p>
+              <p style="margin-top:8px; font-size:11px;">四種模型的分數轉權重流程相同：篩選合格股票→依分數排序→(若設最大持股數)取前K檔→依分數比例分配初始權重→套用單檔上限，超過上限的固定在上限、剩餘資金依其他股票分數重新分配→股票太少湊不滿曝險上限時，剩餘保留現金。</p>
             </div>
           </details>
 
@@ -927,50 +926,12 @@ function scoreOne(c, p) {
   return Math.max(base, 0);
 }
 
-// 第二代多因子：異常調升 × log(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率。
-// 跟其他配置方式不同，這個算法要看「同一天整批候選」的相對排名(動能相對中位數、波動率
-// 缺值用同批中位數補)，不是單一候選就能算完，所以獨立成batch版本，不能用scoreOne逐檔算。
-function scoreMultifactorBatch(cands, p) {
-  const mom = [], vol = [];
-  for (const c of cands) {
-    const priceArr = PRICES[c.ticker];
-    if (!priceArr) { mom.push(0); vol.push(null); continue; }
-    const window = priceArr.slice(Math.max(0, c.entryIdx - 20), c.entryIdx);
-    const rets = [];
-    for (let i = 1; i < window.length; i++) {
-      if (window[i] != null && window[i - 1] != null && window[i - 1] !== 0) {
-        rets.push((window[i] - window[i - 1]) / window[i - 1]);
-      }
-    }
-    mom.push(rets.length ? rets.reduce((a, b) => a + b, 0) : 0);
-    vol.push(rets.length > 1 ? stdSample(rets) : null);
-  }
-  const volMedian = medianSkipNull(vol);
-  let volFilled = vol.map(v => v == null ? volMedian : v);
-  const positiveVols = volFilled.filter(v => v != null && v > 0);
-  const volFloor = positiveVols.length ? Math.min(...positiveVols) : 0.01;
-  volFilled = volFilled.map(v => (v == null || v === 0) ? volFloor : v);
-  const momMedian = medianSkipNull(mom) || 0;
-
-  return cands.map((c, idx) => {
-    const zRaw = (c.histAvgChange != null && c.histStdChange != null && c.histStdChange !== 0)
-      ? (c.targetChangePct - c.histAvgChange) / c.histStdChange
-      : 0;
-    const zChange = Math.min(Math.max(zRaw, -3), 3) + 3.1;
-    const logAnalyst = Math.log1p(c.analystCount);
-    const upside = Math.max(c.upsideUsed, 0.001);
-    const streakFactor = 1.0 + Math.min(c.streak, 10) * 0.05;
-    const momFactor = Math.max(mom[idx] - momMedian, -0.5) + 0.51;
-    let base = zChange * logAnalyst * upside * momFactor * streakFactor / volFilled[idx];
-
-    if (p.avgRule === 'tier3') {
-      const changeBoost = c.histAvgChange != null && c.targetChangePct > c.histAvgChange;
-      const analystBoost = c.histAvgAnalyst != null && c.analystCount > c.histAvgAnalyst;
-      if (changeBoost || analystBoost) base *= p.avgBoostMult;
-    }
-    return Math.max(base, 0);
-  });
-}
+// 2026-07-29移除：原本這裡有一個「多因子（不含大盤相對動能）」的自創配置方式
+// (scoreMultifactorBatch)，跟同事backtest.js比對後發現他的引擎只有equal/revision/
+// score/enhanced四種配置方式，根本沒有這個模式——上次拿它去跟同事伺服器比對出的
+// 「排序相反」，其實是他的normalizeOptions()把不認得的allocation值靜默退回成'score'，
+// 兩邊比的根本不是同一個東西，不是真的bug。既然要改成跟同事一致的模型/命名，這個
+// 自創的配置方式直接移除，不留骨架。
 
 // scoresArr: [{ticker,score}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
 function allocateWeights(scoresArr, p) {
@@ -1131,13 +1092,11 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
     if (entriesByIdx.has(i)) {
       const todaysAll = entriesByIdx.get(i);
       if (todaysAll.length > 0) {
-        // 分數只算合格的那些——multifactor這類看「同一批候選相對排名」的算法，分母/中位數
-        // 統計不該被不合格的候選(它們不會真的進場，只用來更新目標價)汙染。
+        // 分數只算合格的那些，不合格的候選(它們不會真的進場，只用來更新目標價)不該
+        // 進入評分計算。
         const qualifying = todaysAll.filter(c => c.qualifies);
         if (qualifying.length > 0) {
-          const scoresArr = p.sizingMode === 'multifactor'
-            ? scoreMultifactorBatch(qualifying, p)
-            : qualifying.map(c => scoreOne(c, p));
+          const scoresArr = qualifying.map(c => scoreOne(c, p));
           qualifying.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
         }
         todaysAll.filter(c => !c.qualifies).forEach(c => {
@@ -1326,7 +1285,7 @@ document.getElementById('p-sizing').addEventListener('change', (e) => {
 
 const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
 const fmtNum2 = (v, digits = 2) => v == null ? '—' : v.toFixed(digits);
-const sizingLabelMap = { equal: '等權', by_upgrade: '調升幅度加權', composite: '綜合分數', multifactor: '多因子', enhanced: '進階多因子' };
+const sizingLabelMap = { equal: '等權配置', by_upgrade: '調升幅度加權', composite: '原始綜合分數', enhanced: '第二代多因子分數' };
 
 // ============================================================================
 // 上方摘要卡片 / 資料涵蓋度
