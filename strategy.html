@@ -237,6 +237,17 @@
   }
   :root[data-theme="dark"] .disclaimer-bar, @media (prefers-color-scheme: dark) { }
 
+  .sensitivity-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .sensitivity-summary-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .sensitivity-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .sensitivity-summary, .sensitivity-grid { grid-template-columns: 1fr; } }
+  .sensitivity-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 8px; }
+  .sensitivity-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .sensitivity-flag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .sensitivity-flag.flag-danger { background: var(--up-dim); color: var(--up); }
+  .sensitivity-flag.flag-warn { background: var(--warn-dim); color: var(--warn-ink); }
+  .sensitivity-flag.flag-ok { background: var(--safe-dim); color: var(--safe-ink); }
+
   .capital-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
   .capital-row .param-field { margin: 0; min-width: 200px; }
 
@@ -423,6 +434,16 @@
           <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
           <div id="excess-curve-holder"></div>
         </div>
+
+        <!-- ===== PARAMETER STABILITY ===== -->
+        <section class="section-card accent-caution">
+          <div class="section-head">
+            <div><span class="eyebrow">Parameter Stability</span><h3>參數穩定度分析</h3></div>
+            <button class="btn caution small" id="sensitivity-btn">執行敏感度分析</button>
+          </div>
+          <p class="section-sub">固定目前左側面板的參數與配置方式，逐一單獨變動6個參數(其餘維持目前設定值)，檢視超額報酬對每個參數的敏感度——鄰近設定落差越大，代表目前這個設定越可能是局部尖峰，過擬合風險越高。</p>
+          <div id="sensitivity-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始分析(約需數秒到數十秒，依資料量而定)。</div></div>
+        </section>
 
         <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
         <section class="section-card accent-safe">
@@ -2113,6 +2134,153 @@ document.getElementById('explore-search-btn').addEventListener('click', async ()
     tr.style.cursor = 'pointer';
     tr.addEventListener('click', () => { applyParamsToForm(result.top[i].params); runAndRenderManual(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   });
+});
+
+// ============================================================================
+// 參數穩定度分析：固定目前左側面板的參數，逐一單獨變動6個參數，其餘維持不變，
+// 檢視超額報酬對每個參數的敏感度——鄰近設定落差越大代表目前設定越可能是局部尖峰。
+// ============================================================================
+const SENSITIVITY_SWEEPS = {
+  minUpgradePct: { label: '最低目標價調升幅度', unit: '%', anchors: [0, 1, 2, 3, 4, 5, 7, 10, 15], fmt: v => `${v}%` },
+  minAnalystCount: { label: '最低分析師數', unit: '位', anchors: [1, 2, 3, 4, 5, 7, 10], fmt: v => `${v}位` },
+  minUpside: { label: '目標價最低上漲空間', unit: '%', anchors: [0, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30], fmt: v => `${(v * 100).toFixed(0)}%` },
+  maxWeightPerStock: { label: '單檔最大權重', unit: '%', anchors: [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50], fmt: v => `${(v * 100).toFixed(0)}%` },
+  maxHoldDays: { label: '最長持有天數', unit: '交易日', anchors: [5, 10, 15, 20, 25, 30, 40, 60], fmt: v => `${v}日` },
+  maxPositions: { label: '最大持股數', unit: '檔', anchors: [1, 2, 3, 5, 8, 10, 15, 20, 0], fmt: v => v === 0 ? '不限' : `${v}檔` },
+};
+
+function buildSweepValues(key, currentValue) {
+  const anchors = SENSITIVITY_SWEEPS[key].anchors;
+  const vals = anchors.includes(currentValue) ? anchors.slice() : [...anchors, currentValue];
+  return [...new Set(vals)].sort((a, b) => a - b);
+}
+
+async function runSensitivityAnalysisAsync(baseParams, start, end, onProgress) {
+  const keys = Object.keys(SENSITIVITY_SWEEPS);
+  const totalRuns = keys.reduce((s, k) => s + buildSweepValues(k, baseParams[k]).length, 0);
+  let done = 0;
+  const baseRun = runBacktest(baseParams, start, end).summary;
+  const results = {};
+  for (const key of keys) {
+    const values = buildSweepValues(key, baseParams[key]);
+    const points = [];
+    for (const v of values) {
+      const p = { ...baseParams, [key]: v };
+      const r = runBacktest(p, start, end).summary;
+      points.push({ value: v, summary: r });
+      done++;
+      if (onProgress) onProgress(done, totalRuns);
+      await new Promise(res => setTimeout(res, 0));
+    }
+    results[key] = { baseValue: baseParams[key], points };
+  }
+  return { baseRun, results };
+}
+
+function sensitivityAnalyze(cfg) {
+  const pts = cfg.points;
+  const baseIdx = pts.findIndex(p => p.value === cfg.baseValue);
+  const values = pts.map(p => p.summary.excessReturnPct);
+  let leftDrop = 0, rightDrop = 0;
+  if (baseIdx > 0) leftDrop = pts[baseIdx].summary.excessReturnPct - pts[baseIdx - 1].summary.excessReturnPct;
+  if (baseIdx < pts.length - 1) rightDrop = pts[baseIdx].summary.excessReturnPct - pts[baseIdx + 1].summary.excessReturnPct;
+  const worstNeighborDrop = Math.max(leftDrop, rightDrop);
+  return { baseIdx, worstNeighborDrop };
+}
+
+function buildSensitivityChartSvg(key, cfg, an) {
+  const pts = cfg.points;
+  const fmt = SENSITIVITY_SWEEPS[key].fmt;
+  const W = 480, H = 190, padL = 44, padR = 14, padT = 12, padB = 26;
+  const yVals = pts.map(p => p.summary.excessReturnPct);
+  let yMin = Math.min(...yVals, 0), yMax = Math.max(...yVals, 0);
+  const pad = (yMax - yMin) * 0.12 || 5;
+  yMin -= pad; yMax += pad;
+  const x = i => padL + (i / Math.max(pts.length - 1, 1)) * (W - padL - padR);
+  const y = v => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+  const zeroY = y(0);
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel');
+
+  let gridLines = '';
+  for (let i = 0; i <= 2; i++) {
+    const gv = yMin + (yMax - yMin) * (i / 2);
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 6}" y="${(gy + 3.2).toFixed(1)}" font-size="9" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1" stroke-dasharray="3,3"/>`;
+
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
+  const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+
+  const xLabels = pts.map((p, i) => `<text x="${x(i).toFixed(1)}" y="${H - padB + 14}" font-size="9" fill="${inkFaint}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`).join('');
+  const dots = pts.map((p, i) => {
+    const isBase = i === an.baseIdx;
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 4.5 : 2.6}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2 : 1.4}"/>`;
+  }).join('');
+
+  const svgId = 'sv' + Math.random().toString(36).slice(2, 9);
+  return { svgId, html: `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%; height:auto;">
+    <defs><clipPath id="${svgId}-pos"><rect x="0" y="0" width="${W}" height="${zeroY.toFixed(1)}"/></clipPath><clipPath id="${svgId}-neg"><rect x="0" y="${zeroY.toFixed(1)}" width="${W}" height="${(H - zeroY).toFixed(1)}"/></clipPath></defs>
+    ${gridLines}
+    <path d="${areaPath}" fill="${upColor}" opacity="0.16" clip-path="url(#${svgId}-pos)"/>
+    <path d="${areaPath}" fill="${downColor}" opacity="0.16" clip-path="url(#${svgId}-neg)"/>
+    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+    ${dots}
+    ${xLabels}
+  </svg>` };
+}
+
+function renderSensitivityResult(container, baseRun, results) {
+  const ranked = Object.entries(results).map(([k, cfg]) => [k, sensitivityAnalyze(cfg)]).sort((a, b) => b[1].worstNeighborDrop - a[1].worstNeighborDrop);
+  const mostFragile = ranked[0], mostStable = ranked[ranked.length - 1];
+
+  const summaryHtml = `
+    <div class="sensitivity-summary">
+      <div class="sensitivity-summary-card">
+        <div class="hint">基準(目前設定)超額報酬</div>
+        <div class="mono" style="font-size:18px; font-weight:700; color:${baseRun.excessReturnPct >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(baseRun.excessReturnPct)}</div>
+      </div>
+      <div class="sensitivity-summary-card">
+        <div class="hint">最脆弱參數</div>
+        <div style="font-size:14px; font-weight:700;">${SENSITIVITY_SWEEPS[mostFragile[0]].label}</div>
+        <div class="hint" style="margin-top:2px;">鄰近設定落差 ${mostFragile[1].worstNeighborDrop.toFixed(0)}pp，可能是局部尖峰</div>
+      </div>
+      <div class="sensitivity-summary-card">
+        <div class="hint">最穩定參數</div>
+        <div style="font-size:14px; font-weight:700;">${SENSITIVITY_SWEEPS[mostStable[0]].label}</div>
+        <div class="hint" style="margin-top:2px;">鄰近設定落差僅 ${mostStable[1].worstNeighborDrop.toFixed(0)}pp</div>
+      </div>
+    </div>`;
+
+  const panelsHtml = Object.entries(results).map(([key, cfg]) => {
+    const an = sensitivityAnalyze(cfg);
+    const { html: chartHtml } = buildSensitivityChartSvg(key, cfg, an);
+    const flagClass = an.worstNeighborDrop > 40 ? 'flag-danger' : an.worstNeighborDrop > 15 ? 'flag-warn' : 'flag-ok';
+    const flagText = an.worstNeighborDrop > 40 ? `⚠ 高敏感度 ${an.worstNeighborDrop.toFixed(0)}pp` : an.worstNeighborDrop > 15 ? `中等敏感度 ${an.worstNeighborDrop.toFixed(0)}pp` : `穩定 ${an.worstNeighborDrop.toFixed(0)}pp`;
+    return `<div class="sensitivity-panel">
+      <div class="sensitivity-panel-head"><span style="font-size:13px; font-weight:700;">${SENSITIVITY_SWEEPS[key].label}</span><span class="sensitivity-flag ${flagClass}">${flagText}</span></div>
+      ${chartHtml}
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `${summaryHtml}<div class="sensitivity-grid">${panelsHtml}</div>
+    <div class="disclaimer-bar">★標記為目前設定值。「鄰近設定落差」= 基準值往左右各移動一格後，超額報酬變動較大的那一側；數字越大代表這個參數在目前設定附近變化越劇烈，過擬合風險越高。</div>`;
+}
+
+document.getElementById('sensitivity-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('sensitivity-btn');
+  const base = readParams();
+  const start = document.getElementById('p-start').value;
+  const end = document.getElementById('p-end').value;
+  const out = document.getElementById('sensitivity-result');
+  btn.disabled = true;
+  renderSearchProgress(out, 0, 1, '分析中');
+  const { baseRun, results } = await runSensitivityAnalysisAsync(base, start, end, (done, total) => renderSearchProgress(out, done, total, '分析中'));
+  btn.disabled = false;
+  renderSensitivityResult(out, baseRun, results);
 });
 
 // ============================================================================
