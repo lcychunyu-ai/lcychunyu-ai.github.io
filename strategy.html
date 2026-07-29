@@ -172,6 +172,43 @@
   .stat-card .value.muted { color: var(--ink-faint); font-size: 18px; }
   .stat-card .sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 4px; }
 
+  /* ===== 一眼看重點的Hero區塊：一個headline數字+兩個直接構成它的子數字，
+     其他會混淆(複利買進持有)的數字改成可展開說明，不再跟headline同權重並排。===== */
+  .hero-block { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px 24px; margin-bottom: 14px; }
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  .hero-label { font-size: 12px; color: var(--ink-faint); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+  .hero-value { font-size: 44px; font-weight: 800; letter-spacing: -0.015em; margin-top: 6px; line-height: 1; }
+  .hero-value.up { color: var(--up); } .hero-value.down { color: var(--down); }
+  .hero-sub { font-size: 12px; color: var(--ink-dim); margin-top: 8px; }
+  .hero-badge { flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+  .hero-badge.up { background: var(--up-dim); color: var(--up); }
+  .hero-badge.down { background: var(--down-dim); color: var(--down); }
+  .hero-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .hero-mini .label { font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
+  .hero-mini .value { font-size: 19px; font-weight: 700; margin-top: 3px; }
+  .hero-mini .sub { font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+  .hero-detail-toggle { margin-top: 14px; }
+  .hero-detail-toggle summary { cursor: pointer; font-size: 11.5px; color: var(--ink-faint); font-weight: 600; list-style: none; }
+  .hero-detail-toggle summary::-webkit-details-marker { display: none; }
+  .hero-detail-toggle summary::before { content: "▶ "; font-size: 9px; }
+  .hero-detail-toggle[open] summary::before { content: "▼ "; }
+  .hero-detail-body { margin-top: 10px; padding: 12px 14px; background: var(--panel-2); border-radius: 10px; font-size: 11.5px; line-height: 1.7; color: var(--ink-dim); }
+  .hero-detail-body .value { font-size: 16px; font-weight: 700; color: var(--ink); }
+
+  /* ===== 側邊快速導航：sticky釘在主內容欄頂端，點了直接跳section，不用硬滑。===== */
+  .quicknav { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 10px 0 12px; margin-bottom: 6px;
+    display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .quicknav a { font-size: 11.5px; font-weight: 600; color: var(--ink-dim); text-decoration: none; padding: 6px 11px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--panel); white-space: nowrap; transition: all .12s ease; }
+  .quicknav a:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ===== 大表格預設收合，避免一次攤開幾百列數字：只留摘要，點了才展開。===== */
+  details.table-toggle { margin-top: 10px; }
+  details.table-toggle > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--accent); list-style: none; padding: 4px 0; }
+  details.table-toggle > summary::-webkit-details-marker { display: none; }
+  details.table-toggle > summary::before { content: "▶ "; font-size: 10px; }
+  details.table-toggle[open] > summary::before { content: "▼ "; }
+
   .coverage-strip {
     display: flex; flex-wrap: wrap; gap: 28px; background: var(--panel); border: 1px solid var(--border);
     border-radius: 14px; padding: 16px 20px; margin-bottom: 18px;
@@ -419,24 +456,37 @@
       </div>
 
       <div>
-        <div id="card-row-holder"></div>
-        <div id="coverage-holder"></div>
-        <div class="chart-panel">
-          <div class="eyebrow-row"><span class="eyebrow">Arithmetic Return Curve</span></div>
-          <div class="block-title" style="margin-left:0;">每日報酬累加 vs. 大盤</div>
-          <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>我們的策略</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
-          <div id="curve-holder"></div>
+        <nav class="quicknav">
+          <a href="#hero-section">總覽</a>
+          <a href="#chart-section">報酬曲線</a>
+          <a href="#stability-section">穩定度分析</a>
+          <a href="#optimizer-section">參數最佳化</a>
+          <a href="#explorer-section">歷史探索</a>
+          <a href="#ledger-section">每日帳本</a>
+          <a href="#methodology-section">方法論</a>
+        </nav>
+        <div id="hero-section">
+          <div id="card-row-holder"></div>
+          <div id="coverage-holder"></div>
         </div>
+        <div id="chart-section">
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Arithmetic Return Curve</span></div>
+            <div class="block-title" style="margin-left:0;">每日報酬累加 vs. 大盤</div>
+            <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>我們的策略</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
+            <div id="curve-holder"></div>
+          </div>
 
-        <div class="chart-panel">
-          <div class="eyebrow-row"><span class="eyebrow">Excess Return Curve</span></div>
-          <div class="block-title" style="margin-left:0;">超額報酬(策略累積 − 大盤累積)</div>
-          <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
-          <div id="excess-curve-holder"></div>
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Excess Return Curve</span></div>
+            <div class="block-title" style="margin-left:0;">超額報酬(策略累積 − 大盤累積)</div>
+            <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
+            <div id="excess-curve-holder"></div>
+          </div>
         </div>
 
         <!-- ===== PARAMETER STABILITY ===== -->
-        <section class="section-card accent-caution">
+        <section class="section-card accent-caution" id="stability-section">
           <div class="section-head">
             <div><span class="eyebrow">Parameter Stability</span><h3>參數穩定度分析</h3></div>
             <button class="btn caution small" id="sensitivity-btn">執行敏感度分析</button>
@@ -446,7 +496,7 @@
         </section>
 
         <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
-        <section class="section-card accent-safe">
+        <section class="section-card accent-safe" id="optimizer-section">
           <div class="section-head">
             <div><span class="eyebrow">Out-of-Sample Optimization</span><h3>參數自動最佳化</h3></div>
             <button class="btn safe small" id="strict-search-btn">重新載入嚴格驗證結果</button>
@@ -456,7 +506,7 @@
         </section>
 
         <!-- ===== IN-SAMPLE EXPLORATION ===== -->
-        <section class="section-card accent-caution">
+        <section class="section-card accent-caution" id="explorer-section">
           <div class="section-head">
             <div><span class="eyebrow">In-Sample Exploration</span><h3>歷史最佳策略探索</h3></div>
             <button class="btn caution small" id="explore-search-btn">載入歷史探索結果</button>
@@ -482,7 +532,7 @@
           <div id="ledger-detail"></div>
         </section>
 
-        <div class="panel explainer" style="margin-bottom:0;">
+        <div class="panel explainer" style="margin-bottom:0;" id="methodology-section">
           <div class="eyebrow-row"><span class="eyebrow">Methodology Notes</span></div>
           <p style="margin-top:10px;">會計方法採<b>每日固定資本平帳</b>：每天以本金100為基準結算，獲利抽回、虧損補入，隔日重新以100開始——權重不會因為股價變動而在日與日之間複利累加。策略與大盤都用「每日報酬率算術加總」呈現累積報酬，避免點位複利與報酬率相加口徑不一致導致的超額報酬計算錯誤。</p>
         </div>
@@ -1330,34 +1380,45 @@ function renderCards(summary, bestExcessInfo, rows) {
     if (taiexEnd != null) buyHoldPct = (taiexEnd / taiexBase - 1) * 100;
   }
   const vsBuyHold = buyHoldPct != null ? summary.totalReturnPct - buyHoldPct : null;
+  const isUp = summary.excessReturnPct >= 0;
 
+  // 2026-07-29重寫：原本5張卡片同權重並排，「大盤買進持有(真實複利)」常常比策略本身
+  // 的數字還大，卻沒有任何視覺提示這是「另一種算法」，第一眼看很容易誤以為策略是失敗
+  // 的。改成一個headline(目前參數超額報酬，這是使用者當下最想知道的答案)+兩個直接
+  // 構成它的子數字(策略總報酬/大盤總報酬，同一種算術口徑，加減關係一目瞭然)，複利
+  // 買進持有這個容易混淆的數字收進可展開的說明框，不再跟headline搶視覺權重。「訓練期
+  // 最佳參數超額報酬」整個移除——那是優化器自己選出的另一組參數的結果，不是「目前」
+  // 設定的答案，放在這裡容易跟headline搞混，優化器區塊自己的推薦卡片已經有這個數字。
   container.innerHTML = `
-    <div class="card-row">
-      <div class="stat-card">
-        <div class="label">我們的策略</div>
-        <div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div>
-        <div class="sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(summary.sharpe)} · 回撤 ${fmtPct(summary.maxDrawdownPct)}</div>
+    <div class="hero-block">
+      <div class="hero-top">
+        <div>
+          <div class="hero-label">目前參數超額報酬（策略 − 大盤，算術口徑）</div>
+          <div class="hero-value ${isUp ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div>
+          <div class="hero-sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(summary.sharpe)} · 最大回撤 ${fmtPct(summary.maxDrawdownPct)}</div>
+        </div>
+        <span class="hero-badge ${isUp ? 'up' : 'down'}">${isUp ? '目前打敗大盤' : '目前落後大盤'}</span>
       </div>
-      <div class="stat-card">
-        <div class="label">台股加權指數</div>
-        <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
-        <div class="sub">每日報酬相加 · 跟策略同一種「不滾入本金」算術口徑，公平比超額報酬用</div>
+      <div class="hero-split">
+        <div class="hero-mini">
+          <div class="label">我們的策略</div>
+          <div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div>
+        </div>
+        <div class="hero-mini">
+          <div class="label">台股加權指數（同算術口徑）</div>
+          <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="label">大盤買進持有(真實複利)</div>
-        <div class="value">${buyHoldPct != null ? fmtPct(buyHoldPct) : '—'}</div>
-        <div class="sub">指數點位真實漲幅，複利。策略 vs 這個數字才是「有沒有擊敗單純買大盤放著不動」：${vsBuyHold != null ? fmtPct(vsBuyHold) : '—'}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">目前參數超額報酬</div>
-        <div class="value ${summary.excessReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div>
-        <div class="sub">策略 − 加權指數(算術口徑)，左側面板目前這組參數</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">訓練期最佳參數超額報酬 <span class="pill-badge caution">實驗性，不建議直接採用</span></div>
-        <div class="value ${bestExcessInfo && bestExcessInfo.excess >= 0 ? 'up' : 'down'}">${bestExcessInfo ? fmtPct(bestExcessInfo.excess) : '—'}</div>
-        <div class="sub">${bestExcessInfo ? bestExcessInfo.sub : '尚未搜尋'}（我們自己優化器選出的參數，搜尋範圍/評分機制已知有選到低曝險組合的風險，不同於左側同事官方推薦參數，見下方樣本外驗證）</div>
-      </div>
+      <details class="hero-detail-toggle">
+        <summary>還有一種「複利買進持有」算法，數字會不一樣——點開看為什麼</summary>
+        <div class="hero-detail-body">
+          上面用的是「每日固定資本平帳」算術口徑：策略跟大盤都用同一種「獲利/虧損當天結清、不滾入隔天本金」的算法比，是公平的蘋果比蘋果，也是超額報酬的計算基礎。<br/><br/>
+          但如果單純「買大盤指數放著不動」，實際上獲利是會複利滾動的，用這種算法算出來的大盤漲幅是
+          <span class="value">${buyHoldPct != null ? fmtPct(buyHoldPct) : '—'}</span>，
+          跟策略總報酬(${fmtPct(summary.totalReturnPct)})相減 = ${vsBuyHold != null ? fmtPct(vsBuyHold) : '—'}，
+          這個數字才是「策略有沒有真的贏過單純買大盤指數放著不動」的答案。兩種算法都對，只是回答不同的問題。
+        </div>
+      </details>
     </div>`;
 }
 
@@ -1661,17 +1722,20 @@ function renderLedgerDetail() {
 
     <div class="eyebrow-row"><span class="eyebrow">History</span></div>
     <div class="block-title" style="margin-left:0; font-size:15px;">每日帳本</div>
-    <div class="table-wrap">
-      <table class="book-table">
-        <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
-        <tbody>${rows.slice().reverse().slice(0, 60).map(rr => {
-          const exposure = rr.exposure * 100;
-          const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
-          return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
-        }).join('')}</tbody>
-      </table>
-    </div>
-    <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">僅顯示最近 60 個交易日，完整資料請用「匯出每日 CSV」。</p>`;
+    <details class="table-toggle">
+      <summary>顯示最近 60 個交易日逐日紀錄</summary>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table class="book-table">
+          <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
+          <tbody>${rows.slice().reverse().slice(0, 60).map(rr => {
+            const exposure = rr.exposure * 100;
+            const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
+            return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+      <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">僅顯示最近 60 個交易日，完整資料請用「匯出每日 CSV」。</p>
+    </details>`;
 }
 
 function exportCsv() {
@@ -2009,10 +2073,14 @@ async function runStrictSearchAndRender() {
     : '192組候選經兩段walk-forward(2023訓練→2024驗證，再2023-2024訓練→2025驗證)綜合排名選出。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。';
   out.appendChild(disclaimer);
 
-  const trainTableWrap = document.createElement('div');
+  const trainTableWrap = document.createElement('details');
+  trainTableWrap.className = 'table-toggle';
   trainTableWrap.style.marginTop = '16px';
-  trainTableWrap.innerHTML = '<p style="font-size:11px; color:var(--ink-faint); margin-bottom:8px;">第二輪前24名候選(依選定分數排序)，僅供檢視：</p>';
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = `顯示第二輪前24名候選(依選定分數排序)`;
+  trainTableWrap.appendChild(summaryEl);
   const trainTable = document.createElement('div');
+  trainTable.style.marginTop = '8px';
   trainTableWrap.appendChild(trainTable);
   renderGridTable(trainTable, result.shortlist);
   out.appendChild(trainTableWrap);
