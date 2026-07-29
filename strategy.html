@@ -430,10 +430,10 @@
         <fieldset>
           <legend>訊號篩選門檻</legend>
           <div class="param-row2">
-            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="3" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
-            <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="3" step="1" min="0"/><span class="suffix">位</span></div></div>
+            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="0" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1" min="0"/><span class="suffix">位</span></div></div>
           </div>
-          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="5" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
+          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="0" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
           <p class="hint" style="margin:8px 0 0;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
         </fieldset>
 
@@ -456,8 +456,8 @@
             <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
           </div>
           <div class="param-row2">
-            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="20" step="5" min="0"/><span class="suffix">交易日</span></div></div>
-            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="0" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
+            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
+            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
           </div>
 
           <div class="param-field" style="margin-bottom:0;">
@@ -2402,6 +2402,17 @@ async function runStrictSearchAndRender() {
     runAndRenderManual(LAST_BEST_EXCESS);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // 2026-07-29新增：搜尋跑完(不管是頁面載入自動跑、按「重新執行搜尋」、或切換候選範圍
+  // radio)，左側參數欄位自動同步成這次選定的參數、日期範圍設回全期間，不用再手動點
+  // 「套用全期間」——現在候選網格是固定離散網格(不是隨機取樣)，跟同事192組候選驗證過
+  // 完全對上，選出來的結果穩定可信，不會像早期隨機取樣版本那樣結果忽好忽壞、需要
+  // 使用者自己判斷要不要套用。「套用全期間」/「只看2026最終測試」兩個按鈕還是保留，
+  // 讓使用者可以切換想看哪一段期間，不用重跑一次搜尋。
+  applyParamsToForm(selected.params);
+  setDateField('start', '2023-01-01');
+  setDateField('end', testEnd);
+  runAndRenderManual(LAST_BEST_EXCESS);
 
   renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS, CURRENT_ROWS);
   return { selected, testEnd, isOverfit };
