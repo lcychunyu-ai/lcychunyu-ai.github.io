@@ -394,6 +394,15 @@
         </fieldset>
 
         <fieldset>
+          <legend>候選股票池</legend>
+          <div class="param-field" style="margin-bottom:0;">
+            <label>產業/主題篩選</label>
+            <select id="p-concept"><option value="">不限（全部216檔）</option></select>
+            <p class="hint" style="margin:8px 0 0;">沿用「市場溫度計」既有的官方產業鏈/主題分類，只是縮小候選股票池，篩選門檻、評分、配置、出場邏輯完全不變。</p>
+          </div>
+        </fieldset>
+
+        <fieldset>
           <legend>配置與風控</legend>
           <div class="param-row2">
             <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
@@ -595,6 +604,8 @@ const FOLD_EV_UP_CACHE = new Map();
 // 2026-07-28新增：每檔股票自己的、依日期排序、沒有NaN空缺的原始收盤價序列(不對齊大盤
 // 交易日曆)，只給動能/波動率回看窗口用，Map<ticker, {dates:[...], closes:[...]}>。
 let PRICES_RAW = new Map();
+// 2026-07-29新增：市場溫度計網站既有的concept_map分類，concept名稱 -> Set(ticker)。
+let CONCEPT_TICKERS = new Map();
 
 // 2026-07-28新增：同事的新聞/股價資料庫本來就從2023-01-03才開始(FactSet/鉅亨網的樣本
 // 起點)，我們自己的stock_prices因為另外回補過2021年至今的歷史，回看窗口在資料最早期
@@ -861,7 +872,7 @@ function prepareEvents(events, floorIdx) {
 
     out.push({
       ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],
-      entryPrice, newTarget,
+      entryPrice, newTarget, referenceClose: prevClose,
       targetChangePct: changeVal, analystCount: analystVal,
       upsidePrice, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
       abnormalRevision: revHist.abnormalRevision, recentUpgrades60: revHist.recentUpgrades60,
@@ -948,6 +959,26 @@ async function loadAll() {
   EV_UP = prepareEvents(dedupedEvents);
   DOWN_BY_DATE = buildDownByDate(dedupedEvents);
 
+  // 2026-07-29新增：沿用市場溫度計網站既有的concept_map分類(46個官方產業鏈+3個主題)，
+  // 不是重新發明一套分類——讓使用者可以直接篩選「只看某個產業/主題」的候選股票池，
+  // 其他篩選/評分/配置/出場邏輯完全不變，只是候選池變小。
+  // 2026-07-29修正：concept名稱在不同dimension可能重複(例如「半導體」同時是官方產業鏈
+  // 分類、也是主題分類，兩邊收錄的股票不一定一樣)——原本直接用concept名稱當key，會把
+  // 兩個不同dimension、剛好同名的分類靜默合併成一個集合，下拉選單也會出現兩個一模一樣
+  // 的「半導體」選項，選哪個都套用同一份合併後的清單，使用者完全看不出來。改用
+  // `${dimension}::${concept}` 當key，兩個「半導體」各自獨立，不會互相污染。
+  const conceptRows = await sbFetchAll('concept_map', { select: 'ticker,concept,dimension' });
+  CONCEPT_TICKERS = new Map(); // "dimension::concept" -> Set(ticker)
+  const conceptsByDim = new Map(); // dimension -> Set(concept)
+  for (const row of conceptRows) {
+    const key = `${row.dimension}::${row.concept}`;
+    if (!CONCEPT_TICKERS.has(key)) CONCEPT_TICKERS.set(key, new Set());
+    CONCEPT_TICKERS.get(key).add(row.ticker);
+    if (!conceptsByDim.has(row.dimension)) conceptsByDim.set(row.dimension, new Set());
+    conceptsByDim.get(row.dimension).add(row.concept);
+  }
+  populateConceptSelect(conceptsByDim);
+
   document.getElementById('updated-at').textContent = DATES[DATES.length - 1];
 }
 
@@ -961,8 +992,13 @@ async function loadAll() {
 // 持有」才會真的整篇忽略。改成保留所有有效價格資料的事件、加一個qualifies欄位，篩選
 // 判斷留到runBacktest的逐日迴圈依「這檔股票今天在不在active裡」分流處理。
 function filterCandidates(cands, p) {
+  // 2026-07-29新增：候選股票池篩選(產業/主題)——限制在concept_map裡屬於選定分類的
+  // 股票才會被當成候選，不在清單內的股票從一開始就不會進場，其他篩選/評分/配置/
+  // 出場邏輯完全不變。conceptFilter為空(不限)時直接跳過，行為不變。
+  const conceptTickers = p.conceptFilter ? CONCEPT_TICKERS.get(p.conceptFilter) : null;
   return cands
     .filter(c => c.entryPrice != null && c.upsidePrice != null)
+    .filter(c => !conceptTickers || conceptTickers.has(c.ticker))
     .map(c => ({
       ...c,
       upsideUsed: c.upsidePrice,
@@ -1187,7 +1223,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       }
     }
     for (const [t, v] of newRowsByTicker) {
-      active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed });
+      active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed, referenceClose: v.row.referenceClose });
     }
     for (const [t, row] of updateOnlyByTicker) {
       active.get(t).target = row.newTarget;
@@ -1231,7 +1267,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       const priceStart = openArr ? openArr[i] : null;
       const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
       if (r != null) intradayRet += w * r;
-      attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, isEntryDay });
+      attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, referenceClose: a ? a.referenceClose : null, isEntryDay });
     }
     const dailyRet = overnightRet + intradayRet;
     // 2026-07-28修正：TAIEX_RET是loadAll()時對「全部歷史」一次算好的全域陣列(2021年至今)，
@@ -1357,6 +1393,7 @@ function readParams() {
     maxPortfolioExposure: Number(document.getElementById('p-maxExposure').value) / 100,
     avgRule: document.getElementById('p-avgRule').value,
     avgBoostMult: Number(document.getElementById('p-avgBoost').value),
+    conceptFilter: document.getElementById('p-concept').value || null,
   };
 }
 
@@ -1638,10 +1675,13 @@ function renderLedgerDetail() {
   const prevLots = new Map();
   if (prevRow) prevRow.holdings.forEach(h => prevLots.set(h.ticker, lotsFor(h.weight, capital, PRICES[h.ticker] ? PRICES[h.ticker][prevRow.idx] : null)));
 
+  // 2026-07-29新增：訊號參考價欄位——對照同事public/strategy.html的當日持股表(他有
+  // 「訊號參考價」這欄，我們原本沒有)，這檔股票當初進場訊號用的參考價(訊號執行日前一
+  // 交易日收盤價，跟上漲空間算法用同一個基準)，讓使用者能對照「當初憑什麼進場」。
   const holdingsRows = r.attribution.slice().sort((a, b) => b.weight - a.weight).map(a => {
     const lots = lotsFor(a.weight, capital, a.priceEnd);
     const space = (a.target != null && a.priceEnd != null && a.priceEnd > 0) ? ((a.target - a.priceEnd) / a.priceEnd * 100) : null;
-    return `<tr><td><b>${a.ticker}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
+    return `<tr><td><b>${a.ticker}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${a.referenceClose != null ? a.referenceClose.toLocaleString() : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
   }).join('');
 
   const buySellRows = [
@@ -1677,6 +1717,9 @@ function renderLedgerDetail() {
       <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
     </tr>`);
   const attributionRows = [...overnightRows, ...intradayRows].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
+  // 2026-07-29新增：對照同事public/strategy.html的貢獻合計列(tfoot)——把隔夜段+盤中段
+  // 全部貢獻加總，應該要等於當日總報酬，讓使用者能直接肉眼核對這張表沒有算漏或算重。
+  const contributionTotal = [...(r.overnightAttribution || []), ...r.attribution].reduce((s, a) => s + (a.contribution || 0), 0);
 
   const totalExposure = r.holdings.reduce((s, h) => s + h.weight, 0) * 100;
   const flowLabel = r.dailyReturn >= 0 ? '提領' : '補入';
@@ -1708,8 +1751,8 @@ function renderLedgerDetail() {
     <div class="two-col-tables">
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>股數</th></tr></thead>
-          <tbody>${holdingsRows || '<tr><td colspan="6" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
+          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>訊號參考價</th><th>股數</th></tr></thead>
+          <tbody>${holdingsRows || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
         </table>
       </div>
       <div class="table-wrap">
@@ -1727,6 +1770,7 @@ function renderLedgerDetail() {
       <table class="book-table">
         <thead><tr><th>股票</th><th>持有區間</th><th>計算權重</th><th>起始價</th><th>結束價</th><th>個股報酬</th><th>策略貢獻</th></tr></thead>
         <tbody>${attributionRows}</tbody>
+        <tfoot><tr><td colspan="6" style="text-align:right; font-weight:700;">貢獻合計</td><td class="mono" style="font-weight:700;">${fmtPct(contributionTotal * 100)}</td></tr></tfoot>
       </table>
     </div>
 
@@ -1835,6 +1879,32 @@ document.getElementById('param-panel').addEventListener('change', (evt) => {
 // #p-start/#p-end還是維持原本的ISO字串(給readParams()等既有邏輯讀)，
 // 只是從type=date改成hidden，靠三個select同步寫入。
 // ============================================================================
+// 2026-07-29新增：concept_map資料載入後才知道有哪些產業/主題可選，所以這個函式在
+// loadAll()抓完concept_map後才呼叫，不是像populateDateYMD那樣頁面一開就能填。
+// dimension用optgroup分組(主題 vs 官方產業鏈)，同一個dimension內按注意力權重加總
+// 由大到小排序，常見的大類排前面。
+function populateConceptSelect(conceptsByDim) {
+  const sel = document.getElementById('p-concept');
+  const dimLabel = { theme: '主題', value_chain: '官方產業鏈' };
+  const dimOrder = ['theme', 'value_chain'];
+  for (const dim of dimOrder) {
+    const concepts = conceptsByDim.get(dim);
+    if (!concepts || !concepts.size) continue;
+    const group = document.createElement('optgroup');
+    group.label = dimLabel[dim] || dim;
+    [...concepts]
+      .map(c => ({ name: c, key: `${dim}::${c}` }))
+      .sort((a, b) => (CONCEPT_TICKERS.get(b.key)?.size || 0) - (CONCEPT_TICKERS.get(a.key)?.size || 0))
+      .forEach(({ name, key }) => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = `${name}（${CONCEPT_TICKERS.get(key).size}檔）`;
+        group.appendChild(opt);
+      });
+    sel.appendChild(group);
+  }
+}
+
 function populateDateYMD(prefix, defaultISO) {
   const [dy, dm, dd] = defaultISO.split('-').map(Number);
   const ySel = document.getElementById(`p-${prefix}-y`);
