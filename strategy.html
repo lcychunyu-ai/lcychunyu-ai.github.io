@@ -2329,21 +2329,20 @@ function buildSensitivityChartSvg(key, cfg, an) {
   const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
   const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
 
+  // 2026-07-29再修正：使用者反饋邊界線上的文字說明太雜、看起來醜——保留虛線本身
+  // (夠清楚表達「這是安全區間邊界」)，拿掉「別低於/別超過」這些文字標籤；邊界的實際
+  // 數值本來就會顯示在X軸座標上，不用在圖表中間再重複標一次。
   let safeZoneHtml = '';
   if (safeRun) {
     const zx1 = x(safeRun.start), zx2 = x(safeRun.end);
     safeZoneHtml += `<rect x="${zx1.toFixed(1)}" y="${padT}" width="${(zx2 - zx1).toFixed(1)}" height="${H - padT - padB}" fill="${upColor}" opacity="0.16"/>`;
     if (safeRun.start > 0) {
       const bx = x(safeRun.start);
-      safeZoneHtml += `
-        <line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>
-        <text x="${bx.toFixed(1)}" y="${padT + 10}" font-size="10" font-weight="700" fill="${downColor}" text-anchor="${safeRun.start < pts.length / 2 ? 'start' : 'end'}">◀ 別低於${fmt(pts[safeRun.start].value)}</text>`;
+      safeZoneHtml += `<line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>`;
     }
     if (safeRun.end < pts.length - 1) {
       const bx = x(safeRun.end);
-      safeZoneHtml += `
-        <line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>
-        <text x="${bx.toFixed(1)}" y="${padT + 10}" font-size="10" font-weight="700" fill="${downColor}" text-anchor="${safeRun.end < pts.length / 2 ? 'start' : 'end'}">別超過${fmt(pts[safeRun.end].value)} ▶</text>`;
+      safeZoneHtml += `<line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>`;
     }
   }
 
