@@ -324,6 +324,15 @@
   .explain-block { border-left: 3px solid var(--safe); background: var(--panel-2); border-radius: 0 10px 10px 0; padding: 12px 16px; margin-bottom: 16px; }
   .explain-block .brief-eyebrow { font-size: 10.5px; font-weight: 700; color: var(--safe); letter-spacing: 0.08em; text-transform: uppercase; }
   .explain-block h4 { margin: 3px 0 8px; font-size: 14px; font-weight: 800; }
+  .explain-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+  .explain-row:last-child { margin-bottom: 0; }
+  .explain-row-label { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); width: 128px; flex-shrink: 0; }
+  .explain-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-dim); background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+  .explain-chip b { color: var(--ink); font-weight: 700; }
+  .explain-chip-muted { color: var(--ink-faint); }
+  .explain-chip-buy { color: var(--up); border-color: var(--up-dim); background: var(--up-dim); }
+  .explain-chip-sell { color: var(--down); border-color: var(--down-dim); background: var(--down-dim); }
+  @media (max-width: 640px) { .explain-row-label { width: 100%; } }
   .explain-block p { margin: 0; font-size: 12.5px; color: var(--ink-dim); line-height: 1.7; }
 
   .two-col-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
@@ -1669,22 +1678,38 @@ function lotsFor(weight, capital, price) {
   return Math.floor((weight * capital) / price);
 }
 
+// 2026-07-29重寫：原本是一整段文字塞進單一<p>——配置規則、持股清單、交易筆數、
+// 當日報酬、資金流全部黏在一起，使用者要逐字讀完一長串句子才能抓到重點，而且
+// 「當日報酬」「資金流」這兩個數字上面的stat-card卡片已經顯示過一次，這裡又用
+// 文字重複講一次，是同一份資訊出現兩次。改成拆成幾個獨立小標籤(chip)：規則設定
+// 一組、持股組成一組、交易動作一組，一眼掃過去就分得出「這是規則」「這是持股」
+// 「這是今天的動作」，不用逐字閱讀；不重複顯示卡片已經有的當日報酬/資金流數字。
 function buildDailyExplanation(r, prevRow) {
-  const sizing = sizingLabelMap[r.sizingLabel] || r.sizingLabel;
-  const capLine = r.maxPositions > 0
-    ? (r.holdings.length <= r.maxPositions
-        ? `新訊號進場當天最多同時按分數留下前 ${r.maxPositions} 檔新標的`
-        : `新訊號進場當天最多新增前 ${r.maxPositions} 檔，已持有部位不會因排名下滑而被強制出場`)
-    : '不限持股數';
-  const holdingsSorted = r.holdings.slice().sort((a, b) => b.weight - a.weight);
-  const top = holdingsSorted.slice(0, 4).map(h => `${tickerLabel(h.ticker)} ${(h.weight * 100).toFixed(2)}%`).join('、');
-  const nBuy = r.buys.length, nSell = r.sells.length;
-  const dailyPct = fmtPct(r.dailyReturn * 100);
-  const flow = r.dailyReturn >= 0 ? `提領 ${(r.dailyReturn * 100).toFixed(2)}%` : `補入 ${(-r.dailyReturn * 100).toFixed(2)}%`;
   if (r.holdings.length === 0) {
-    return `${r.date} 目前無符合條件的持股。`;
+    return `<p style="margin:0;">${r.date} 目前無符合條件的持股。</p>`;
   }
-  return `${r.date} 採用「${sizing}」，${capLine}，並將單檔權重限制在 ${(r.maxWeightPerStock * 100).toFixed(0)}%。收盤後共持有 ${r.holdings.length} 檔，主要為 ${top}。當日訊號或再平衡交易為買進 ${nBuy} 筆、賣出 ${nSell} 筆；當日報酬 ${dailyPct}，${flow}，隔日再以標準資本100開始。`;
+  const sizing = sizingLabelMap[r.sizingLabel] || r.sizingLabel;
+  const capLabel = r.maxPositions > 0 ? `最多 ${r.maxPositions} 檔` : '不限持股數';
+  const holdingsSorted = r.holdings.slice().sort((a, b) => b.weight - a.weight);
+  const topChips = holdingsSorted.slice(0, 5).map(h => `<span class="explain-chip">${tickerLabel(h.ticker)} <b>${(h.weight * 100).toFixed(1)}%</b></span>`).join('');
+  const nBuy = r.buys.length, nSell = r.sells.length;
+
+  return `
+    <div class="explain-row">
+      <span class="explain-row-label">規則設定</span>
+      <span class="explain-chip">${sizing}</span>
+      <span class="explain-chip">${capLabel}</span>
+      <span class="explain-chip">單檔上限 ${(r.maxWeightPerStock * 100).toFixed(0)}%</span>
+    </div>
+    <div class="explain-row">
+      <span class="explain-row-label">收盤後持股（共 ${r.holdings.length} 檔）</span>
+      ${topChips}${r.holdings.length > 5 ? `<span class="explain-chip explain-chip-muted">+${r.holdings.length - 5} 檔</span>` : ''}
+    </div>
+    <div class="explain-row">
+      <span class="explain-row-label">今日動作</span>
+      <span class="explain-chip ${nBuy > 0 ? 'explain-chip-buy' : ''}">買進 ${nBuy} 筆</span>
+      <span class="explain-chip ${nSell > 0 ? 'explain-chip-sell' : ''}">賣出 ${nSell} 筆</span>
+    </div>`;
 }
 
 function renderLedger(rows) {
@@ -1746,30 +1771,35 @@ function renderLedgerDetail() {
     }),
   ].join('') || '<tr><td colspan="6" style="color:var(--ink-faint);">今日無買賣</td></tr>';
 
-  // 2026-07-28新增：對照同事backtest.js的positionReturns，把隔夜段(前收→開盤，用重新
-  // 配置前的舊權重)也拆到個股層級一起顯示，不再只有盤中段——這樣表格裡每一列的貢獻
-  // 加總才會等於當日總報酬，不是只等於盤中段。
-  const overnightRows = (r.overnightAttribution || []).map(a => `
+  // 2026-07-29重寫：原本隔夜段/盤中段各自一整套列(同一檔股票出現兩次)，跟上面「當日
+  // 持股」表視覺上很像(都是股票+權重+價格)，使用者掃過去容易覺得「這兩張表是不是在
+  // 講同一件事」。改成同一檔股票合併成一列，隔夜/盤中的報酬跟貢獻各自用獨立欄位並排
+  // 顯示，列數砍半(15檔股票=15列，不是30列)，也讓這張表跟「當日持股」表的差異更明顯：
+  // 那張是「現在持有什麼、目標價多少」，這張是「今天的報酬怎麼來的」。
+  const attrByTicker = new Map();
+  (r.overnightAttribution || []).forEach(a => {
+    attrByTicker.set(a.ticker, { ticker: a.ticker, weight: a.weight, overnightRet: a.ret, overnightContrib: a.contribution });
+  });
+  r.attribution.forEach(a => {
+    const row = attrByTicker.get(a.ticker) || { ticker: a.ticker, weight: a.weight };
+    row.weight = a.weight;
+    row.intradayRet = a.ret;
+    row.intradayContrib = a.contribution;
+    row.isEntryDay = a.isEntryDay;
+    attrByTicker.set(a.ticker, row);
+  });
+  const combinedAttrRows = [...attrByTicker.values()].sort((a, b) => b.weight - a.weight);
+  const retCell = (v) => v != null ? `<td class="mono" style="color:${v >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(v * 100)}</td>` : '<td class="mono" style="color:var(--ink-faint);">—</td>';
+  const attributionRows = combinedAttrRows.map(a => `
     <tr>
-      <td><b>${tickerLabel(a.ticker)}</b></td>
-      <td style="color:var(--ink-faint);">前收至開盤(隔夜段)</td>
+      <td><b>${tickerLabel(a.ticker)}</b>${a.isEntryDay ? ' <span class="tag buy" style="font-size:9px;">進場日</span>' : ''}</td>
       <td class="mono">${fmtPct(a.weight * 100)}</td>
-      <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
-      <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
-      <td class="mono ${a.ret != null && a.ret >= 0 ? 'up' : 'down'}" style="color:${a.ret != null ? (a.ret >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${a.ret != null ? fmtPct(a.ret * 100) : '—'}</td>
-      <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
-    </tr>`);
-  const intradayRows = r.attribution.map(a => `
-    <tr>
-      <td><b>${tickerLabel(a.ticker)}</b></td>
-      <td style="color:var(--ink-faint);">開盤至收盤(盤中段)${a.isEntryDay ? '·進場日' : ''}</td>
-      <td class="mono">${fmtPct(a.weight * 100)}</td>
-      <td class="mono">${a.priceStart != null ? a.priceStart.toLocaleString() : '—'}</td>
-      <td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td>
-      <td class="mono ${a.ret != null && a.ret >= 0 ? 'up' : 'down'}" style="color:${a.ret != null ? (a.ret >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${a.ret != null ? fmtPct(a.ret * 100) : '—'}</td>
-      <td class="mono">${a.contribution != null ? fmtPct(a.contribution * 100) : '—'}</td>
-    </tr>`);
-  const attributionRows = [...overnightRows, ...intradayRows].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
+      ${retCell(a.overnightRet)}
+      <td class="mono">${a.overnightContrib != null ? fmtPct(a.overnightContrib * 100) : '—'}</td>
+      ${retCell(a.intradayRet)}
+      <td class="mono">${a.intradayContrib != null ? fmtPct(a.intradayContrib * 100) : '—'}</td>
+      <td class="mono" style="font-weight:700;">${fmtPct(((a.overnightContrib || 0) + (a.intradayContrib || 0)) * 100)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
   // 2026-07-29新增：對照同事public/strategy.html的貢獻合計列(tfoot)——把隔夜段+盤中段
   // 全部貢獻加總，應該要等於當日總報酬，讓使用者能直接肉眼核對這張表沒有算漏或算重。
   const contributionTotal = [...(r.overnightAttribution || []), ...r.attribution].reduce((s, a) => s + (a.contribution || 0), 0);
@@ -1798,7 +1828,7 @@ function renderLedgerDetail() {
     <div class="explain-block">
       <div class="brief-eyebrow">Daily Explanation</div>
       <h4>這一天如何配置與買賣？</h4>
-      <p>${buildDailyExplanation(r, prevRow)}</p>
+      ${buildDailyExplanation(r, prevRow)}
     </div>
 
     <div class="two-col-tables">
@@ -1818,10 +1848,10 @@ function renderLedgerDetail() {
 
     <div class="eyebrow-row" style="margin-top:4px;"><span class="eyebrow">Position Return Attribution</span></div>
     <div class="block-title" style="margin-left:0; font-size:15px;">個股當日報酬明細</div>
-    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 計算權重 × 個股區間報酬，隔夜段(前收→開盤，用重新配置前的舊權重)跟盤中段(開盤→收盤，用重新配置後的新權重)分開列出；兩段全部列的貢獻加總，等於當日總報酬。</p>
+    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 權重 × 個股區間報酬，隔夜段(前收→開盤，用重新配置前的舊權重)跟盤中段(開盤→收盤，用重新配置後的新權重)分開算，兩欄合計等於當日總報酬。</p>
     <div class="table-wrap" style="margin-bottom:18px;">
       <table class="book-table">
-        <thead><tr><th>股票</th><th>持有區間</th><th>計算權重</th><th>起始價</th><th>結束價</th><th>個股報酬</th><th>策略貢獻</th></tr></thead>
+        <thead><tr><th>股票</th><th>權重</th><th>隔夜段報酬</th><th>隔夜段貢獻</th><th>盤中段報酬</th><th>盤中段貢獻</th><th>當日合計貢獻</th></tr></thead>
         <tbody>${attributionRows}</tbody>
         <tfoot><tr><td colspan="6" style="text-align:right; font-weight:700;">貢獻合計</td><td class="mono" style="font-weight:700;">${fmtPct(contributionTotal * 100)}</td></tr></tfoot>
       </table>
