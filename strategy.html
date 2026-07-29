@@ -418,6 +418,13 @@
           <div id="curve-holder"></div>
         </div>
 
+        <div class="chart-panel">
+          <div class="eyebrow-row"><span class="eyebrow">Excess Return Curve</span></div>
+          <div class="block-title" style="margin-left:0;">超額報酬(策略累積 − 大盤累積)</div>
+          <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
+          <div id="excess-curve-holder"></div>
+        </div>
+
         <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
         <section class="section-card accent-safe">
           <div class="section-head">
@@ -1443,6 +1450,66 @@ function renderCurve(rows) {
   hit.addEventListener('mouseleave', hideTip);
 }
 
+// 2026-07-29新增：超額報酬(策略累積-大盤累積)單獨畫一張圖，不用再自己心算兩條線的
+// 距離——正超額用up色填色、負超額用down色填色，一眼就看得出策略跑贏/跑輸大盤的區間。
+function renderExcessCurve(rows) {
+  const container = document.getElementById('excess-curve-holder');
+  if (!rows.length) { container.innerHTML = ''; return; }
+  const W = 900, H = 220, padL = 46, padR = 16, padT = 14, padB = 22;
+  const vals = rows.map(r => r.excess * 100);
+  let vMin = Math.min(...vals, 0), vMax = Math.max(...vals, 0);
+  if (vMin === vMax) { vMin -= 1; vMax += 1; }
+  const pad = (vMax - vMin) * 0.08;
+  vMin -= pad; vMax += pad;
+  const x = i => padL + (i / Math.max(rows.length - 1, 1)) * (W - padL - padR);
+  const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const upColor = cssVar('--up'), downColor = cssVar('--down');
+
+  let gridLines = '';
+  for (let i = 0; i <= 3; i++) {
+    const gv = vMin + (vMax - vMin) * (i / 3);
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  const zeroY = y(0);
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1" stroke-dasharray="3,3"/>`;
+
+  const linePath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.excess * 100).toFixed(1)}`).join(' ');
+  const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + rows.map((r, i) => `L${x(i).toFixed(1)},${y(r.excess * 100).toFixed(1)}`).join(' ') + ` L${x(rows.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+
+  const svgId = 'ec' + Math.random().toString(36).slice(2, 9);
+  container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <clipPath id="${svgId}-pos"><rect x="0" y="0" width="${W}" height="${zeroY.toFixed(1)}"/></clipPath>
+      <clipPath id="${svgId}-neg"><rect x="0" y="${zeroY.toFixed(1)}" width="${W}" height="${(H - zeroY).toFixed(1)}"/></clipPath>
+    </defs>
+    ${gridLines}
+    <path d="${areaPath}" fill="${upColor}" opacity="0.18" clip-path="url(#${svgId}-pos)"/>
+    <path d="${areaPath}" fill="${downColor}" opacity="0.18" clip-path="url(#${svgId}-neg)"/>
+    <path d="${linePath}" fill="none" stroke="${cssVar('--accent')}" stroke-width="2.2" stroke-linejoin="round"/>
+    <rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" id="${svgId}-hit"/>
+  </svg>
+  <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--ink-faint); margin-top:4px;">
+    <span>${rows[0].date}</span><span>${rows[Math.floor(rows.length/2)].date}</span><span>${rows[rows.length-1].date}</span>
+  </div>`;
+
+  const svg = document.getElementById(svgId);
+  const hit = document.getElementById(`${svgId}-hit`);
+  hit.style.cursor = 'crosshair';
+  hit.addEventListener('mousemove', (evt) => {
+    const rect = svg.getBoundingClientRect();
+    const relX = (evt.clientX - rect.left) / rect.width * W;
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((relX - padL) / (W - padL - padR) * (rows.length - 1))));
+    const r = rows[i];
+    showTip(evt, `<b>${r.date}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b><br/>策略：<b>${fmtPct(r.cumReturn * 100)}</b><br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b>`);
+  });
+  hit.addEventListener('mouseleave', hideTip);
+}
+
 const tooltipEl = document.getElementById('tooltip');
 function showTip(evt, html) {
   tooltipEl.innerHTML = html;
@@ -1680,6 +1747,7 @@ function runAndRenderManual(bestExcessInfo) {
   renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS, rows);
   renderCoverage();
   renderCurve(rows);
+  renderExcessCurve(rows);
   renderLedger(rows);
   return { rows, summary };
 }
