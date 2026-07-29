@@ -701,9 +701,20 @@ function renderSentiment(winRevisions) {
     `;
   }
 
-  const divergent = tpEvents
+  // 2026-07-29修正：原本直接對「事件」排序取前5，同一檔股票在時間窗口內如果有好幾篇
+  // 目標價新聞、剛好每篇的估值區間都很寬，會把前幾名全部佔滿(例如聯電同時佔了1、2、3名)，
+  // 擠掉其他公司，「Top 5」看起來像是重複的同一家公司，不是5家不同公司的分歧度比較。
+  // 改成先按ticker分組，每檔股票只取「分歧度最大的那一篇」代表，再對「股票」排序取前5，
+  // 確保排行榜上一定是5家不同公司。
+  const bySpreadTicker = new Map();
+  tpEvents
     .filter(r => r.target_high != null && r.target_low != null && r.new_target)
     .map(r => ({ ...r, spreadPct: (Number(r.target_high) - Number(r.target_low)) / Number(r.new_target) * 100 }))
+    .forEach(r => {
+      const existing = bySpreadTicker.get(r.ticker);
+      if (!existing || r.spreadPct > existing.spreadPct) bySpreadTicker.set(r.ticker, r);
+    });
+  const divergent = [...bySpreadTicker.values()]
     .sort((a,b) => b.spreadPct - a.spreadPct)
     .slice(0, 5);
   const divEl = document.getElementById('divergence-list');
