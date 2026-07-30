@@ -436,7 +436,7 @@
   <section id="sentiment-section">
     <h2 class="section-label" id="sentiment-section-label">分析師市場情緒 · 評等結構與分歧度</h2>
     <div class="sentiment-card" style="margin-bottom:14px;">
-      <div class="chart-title" style="margin-bottom:0;">溫度變化趨勢（依區間長度自動分桶，避免單日樣本過少造成雜訊）</div>
+      <div class="chart-title" style="margin-bottom:0;">評等結構隨時間變化（積極樂觀／保持中立／保守悲觀 佔比，依區間長度自動分桶）</div>
       <div id="trend-chart"></div>
       <div class="rating-legend" id="trend-legend" style="margin-top:8px;"></div>
     </div>
@@ -634,32 +634,25 @@ function computeTemps(unifiedEvents) {
   return { up: agg(groups.UP), down: agg(groups.DOWN) };
 }
 
-// ---------- 溫度時間序列(2026-07-30新增)：市場情緒板塊原本只有單一時間窗口的靜態
-// 快照(評等結構/分歧度排行)，看不出溫度「正在往哪個方向移動」——溫度計這個比喻真正
-// 該回答的問題是變化率、不是單一讀數。這裡把unifiedTargetEvents按天分組算加權平均
-// 溫度，再依選取區間長度自動分桶(避免區間拉長到90天時，每天樣本數太少、線圖雜訊蓋過
-// 趨勢)：≤7天用逐日、≤30天每2天一桶、更長(90天/全部)每7天一桶(等同週線)。
-function computeTempTrendSeries(unifiedEvents) {
+// ---------- 評等結構隨時間變化(2026-07-30改版)：第一版用折線圖畫「溫度」隨時間變化，
+// 使用者反饋看不直觀——折線圖適合看單一數值的走勢，但「評等結構正在轉變」這件事
+// 本質上是「三個類別的佔比此消彼長」，人眼天生更容易從堆疊長條的色塊面積變化讀出
+// 「樂觀的紅色正在縮小、悲觀的綠色正在變大」，不需要先理解Y軸數字才能判讀。改成
+// 每個時間桶畫一條100%堆疊長條(積極樂觀/保持中立/保守悲觀三色疊起來)，直接複用
+// 靜態「評等結構」卡片本來就有的rating_bullish/neutral/bearish欄位跟顏色語意，
+// 只是多了時間這個維度，新舊兩張卡片講的是同一件事、不會互相矛盾。
+function computeRatingTrendSeries(tpEvents) {
   const rangeDays = RANGE_DAYS[filterRange] || 30;
   const bucketDays = rangeDays <= 7 ? 1 : (rangeDays <= 30 ? 2 : 7);
   const byBucket = {};
-  unifiedEvents.forEach(r => {
-    if (r.direction !== 'UP' && r.direction !== 'DOWN') return;
-    // 用「距離MAX_DATE幾天」往回分桶，跟windowUnifiedEvents()的錨定邏輯一致，
-    // 不用自然週/自然月切，這樣桶界永遠對齊「今天」，不會因為今天是週幾而跳動。
+  tpEvents.forEach(r => {
     const daysAgo = Math.round((new Date(MAX_DATE + 'T00:00:00') - new Date(r.date + 'T00:00:00')) / 86400000);
     const bucketIdx = Math.floor(daysAgo / bucketDays);
-    if (!byBucket[bucketIdx]) byBucket[bucketIdx] = { up: [], down: [], bucketIdx };
-    byBucket[bucketIdx][r.direction === 'UP' ? 'up' : 'down'].push(r);
+    if (!byBucket[bucketIdx]) byBucket[bucketIdx] = { bull: 0, neutral: 0, bear: 0, bucketIdx };
+    byBucket[bucketIdx].bull += Number(r.rating_bullish) || 0;
+    byBucket[bucketIdx].neutral += Number(r.rating_neutral) || 0;
+    byBucket[bucketIdx].bear += Number(r.rating_bearish) || 0;
   });
-  function agg(list) {
-    let sumW = 0, sumWeighted = 0;
-    list.forEach(r => {
-      const w = Number(r.analyst_count) || 0;
-      sumWeighted += (r.target_change_pct / 100) * w; sumW += w;
-    });
-    return { count: list.length, weight: sumW, temp: sumW ? +(sumWeighted / sumW * 100).toFixed(2) : null };
-  }
   const maxD = new Date(MAX_DATE + 'T00:00:00');
   return Object.values(byBucket)
     .sort((a, b) => b.bucketIdx - a.bucketIdx) // bucketIdx越大代表越久以前，降冪排序=由舊到新
@@ -668,98 +661,81 @@ function computeTempTrendSeries(unifiedEvents) {
       const bucketStart = new Date(bucketEnd.getTime() - (bucketDays - 1) * 86400000);
       const label = bucketDays === 1 ? bucketEnd.toISOString().slice(5, 10)
         : `${bucketStart.toISOString().slice(5, 10)}~${bucketEnd.toISOString().slice(5, 10)}`;
-      return { date: label, up: agg(b.up), down: agg(b.down) };
+      const total = b.bull + b.neutral + b.bear;
+      return {
+        date: label, total, bull: b.bull, neutral: b.neutral, bear: b.bear,
+        bullPct: total ? b.bull / total * 100 : 0,
+        neutralPct: total ? b.neutral / total * 100 : 0,
+        bearPct: total ? b.bear / total * 100 : 0,
+      };
     });
 }
 
-// 溫度趨勢雙線圖：跟現有renderLineChart共用cssVar色票/格線風格，但那個函式只畫
-// 單一序列(每個點自己決定顏色)，這裡要同時比較「調升溫度」跟「調降溫度」兩條線，
-// 各自獨立成一條path，缺值(那個桶完全沒有該方向的事件)直接斷線、不補0，
-// 避免「沒有調降事件」被誤讀成「調降溫度是0%(沒有變化)」。
-function renderTrendChart(container, legendEl, series) {
-  if (!series.length) {
-    container.innerHTML = `<div class="chart-empty">此區間無足夠資料繪製趨勢</div>`;
+function renderRatingTrendChart(container, legendEl, series) {
+  const hasData = series.some(s => s.total > 0);
+  if (!hasData) {
+    container.innerHTML = `<div class="chart-empty">此區間無評等資料，暫無法繪製評等結構趨勢</div>`;
     legendEl.innerHTML = '';
     return;
   }
-  const W = 900, H = 170, padL = 44, padR = 14, padT = 14, padB = 24;
-  const upVals = series.map(s => s.up.temp).filter(v => v != null);
-  const downVals = series.map(s => s.down.temp).filter(v => v != null);
-  const allVals = upVals.concat(downVals).concat([0]);
-  let vMin = Math.min(...allVals), vMax = Math.max(...allVals);
-  if (vMin === vMax) { vMin -= 1; vMax += 1; }
-  const vPad = (vMax - vMin) * 0.15;
-  vMin -= vPad; vMax += vPad;
-  const x = i => padL + (series.length === 1 ? 0 : (i / (series.length - 1)) * (W - padL - padR));
-  const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+  const W = 900, H = 180, padL = 32, padR = 14, padT = 10, padB = 28;
+  const n = series.length;
+  const bandW = (W - padL - padR) / n;
+  const barW = Math.max(4, bandW * 0.62);
+  const y0 = H - padB, plotH = H - padT - padB;
 
-  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
-  const upColor = cssVar('--up'), downColor = cssVar('--down');
+  const bullColor = cssVar('--up'), neutralColor = cssVar('--ink-faint'), bearColor = cssVar('--down'), inkFaint = cssVar('--ink-faint'), gridColor = cssVar('--grid');
 
   let gridLines = '';
-  const gridN = 3;
-  for (let i = 0; i <= gridN; i++) {
-    const gv = vMin + (vMax - vMin) * (i / gridN);
-    const gy = y(gv);
+  [0, 25, 50, 75, 100].forEach(p => {
+    const gy = padT + (1 - p / 100) * plotH;
     gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
-    gridLines += `<text x="${padL-8}" y="${(gy+3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(1)}%</text>`;
-  }
-  // 0%基準線加粗，一眼看出多空翻轉的時間點
-  const zeroY = y(0);
-  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1.2" stroke-dasharray="3,3"/>`;
-
-  function buildPath(key, color) {
-    let segs = [], cur = [];
-    series.forEach((s, i) => {
-      const v = s[key].temp;
-      if (v == null) { if (cur.length) { segs.push(cur); cur = []; } return; }
-      cur.push(`${cur.length === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-    });
-    if (cur.length) segs.push(cur);
-    const pathD = segs.map(seg => seg.join(' ')).join(' ');
-    let dots = '';
-    series.forEach((s, i) => {
-      const v = s[key].temp;
-      if (v == null) return;
-      dots += `<circle class="pt" data-i="${i}" data-key="${key}" cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.2" fill="${color}" stroke="${cssVar('--panel')}" stroke-width="1.5"/>`;
-    });
-    return { pathD, dots };
-  }
-  const upPath = buildPath('up', upColor);
-  const downPath = buildPath('down', downColor);
-
-  const labelStep = Math.max(1, Math.ceil(series.length / 8));
-  let xLabels = '';
-  series.forEach((s, i) => {
-    if (i % labelStep !== 0 && i !== series.length - 1) return;
-    xLabels += `<text x="${x(i).toFixed(1)}" y="${H-6}" font-size="9" fill="${inkFaint}" text-anchor="middle">${s.date}</text>`;
+    gridLines += `<text x="${padL-6}" y="${(gy+3).toFixed(1)}" font-size="9" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${p}%</text>`;
   });
 
-  const svgId = 'trend' + Math.random().toString(36).slice(2, 9);
+  let bars = '', xLabels = '';
+  const labelStep = Math.max(1, Math.ceil(n / 10));
+  series.forEach((s, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    const x0 = cx - barW / 2;
+    if (s.total > 0) {
+      // 由下往上疊：保守悲觀(綠) → 保持中立(灰) → 積極樂觀(紅)。紅色區塊縮小時，
+      // 視覺上會從長條最上方往下退，對應「情緒正在退燒」這個直覺方向。
+      const bearH = s.bearPct / 100 * plotH;
+      const neutralH = s.neutralPct / 100 * plotH;
+      const bullH = s.bullPct / 100 * plotH;
+      const bearY = y0 - bearH;
+      const neutralY = bearY - neutralH;
+      const bullY = neutralY - bullH;
+      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${bearY.toFixed(1)}" width="${barW.toFixed(1)}" height="${bearH.toFixed(1)}" fill="${bearColor}"/>`;
+      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${neutralY.toFixed(1)}" width="${barW.toFixed(1)}" height="${neutralH.toFixed(1)}" fill="${neutralColor}" opacity="0.55"/>`;
+      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${bullY.toFixed(1)}" width="${barW.toFixed(1)}" height="${bullH.toFixed(1)}" fill="${bullColor}"/>`;
+    }
+    if (i % labelStep === 0 || i === n - 1) {
+      xLabels += `<text x="${cx.toFixed(1)}" y="${H-8}" font-size="9" fill="${inkFaint}" text-anchor="middle">${s.date}</text>`;
+    }
+  });
+
+  const svgId = 'ratetrend' + Math.random().toString(36).slice(2, 9);
   container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    ${gridLines}
-    <path d="${upPath.pathD}" fill="none" stroke="${upColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    <path d="${downPath.pathD}" fill="none" stroke="${downColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    ${upPath.dots}${downPath.dots}
-    ${xLabels}
+    ${gridLines}${bars}${xLabels}
   </svg>`;
   legendEl.innerHTML = `
-    <span><span class="dot bull-dot"></span>調升溫度</span>
-    <span><span class="dot bear-dot"></span>調降溫度</span>
-    <span style="color:var(--ink-faint);">虛線＝0%基準；斷線處代表該區間無樣本，非溫度為0</span>
+    <span><span class="dot bull-dot"></span>積極樂觀</span>
+    <span><span class="dot neutral-dot"></span>保持中立</span>
+    <span><span class="dot bear-dot"></span>保守悲觀</span>
+    <span style="color:var(--ink-faint);">每欄＝一個時間區間的評等佔比；空白欄代表該區間無樣本</span>
   `;
 
   const svg = document.getElementById(svgId);
-  svg.querySelectorAll('.pt').forEach(dot => {
-    dot.style.cursor = 'pointer';
-    dot.addEventListener('mousemove', (evt) => {
-      const i = Number(dot.dataset.i), key = dot.dataset.key;
+  svg.querySelectorAll('.seg').forEach(seg => {
+    seg.style.cursor = 'pointer';
+    seg.addEventListener('mousemove', (evt) => {
+      const i = Number(seg.dataset.i);
       const s = series[i];
-      const agg = s[key];
-      const dirLabel = key === 'up' ? '調升' : '調降';
-      showTip(evt, `<b>${s.date}</b><br/>${dirLabel}溫度：<b>${agg.temp}%</b><br/>樣本：${agg.count}篇 · 加權分析師數 ${agg.weight}`);
+      showTip(evt, `<b>${s.date}</b><br/>積極樂觀 ${s.bull}（${s.bullPct.toFixed(0)}%）<br/>保持中立 ${s.neutral}（${s.neutralPct.toFixed(0)}%）<br/>保守悲觀 ${s.bear}（${s.bearPct.toFixed(0)}%）<br/>樣本：${s.total}人次`);
     });
-    dot.addEventListener('mouseleave', hideTip);
+    seg.addEventListener('mouseleave', hideTip);
   });
 }
 
@@ -905,8 +881,8 @@ function renderSentiment(winRevisions) {
     });
   }
 
-  const trendSeries = computeTempTrendSeries(rangeFilteredUnifiedEvents());
-  renderTrendChart(document.getElementById('trend-chart'), document.getElementById('trend-legend'), trendSeries);
+  const ratingTrendSeries = computeRatingTrendSeries(tpEvents);
+  renderRatingTrendChart(document.getElementById('trend-chart'), document.getElementById('trend-legend'), ratingTrendSeries);
 }
 
 // ---------- industry heat (L1), recomputed on filter change ----------
