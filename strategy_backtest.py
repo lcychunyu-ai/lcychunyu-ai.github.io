@@ -642,7 +642,11 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         # --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
         # 固定資本每日平帳：總曝險才會真的每天都保證不超過max_portfolio_exposure。今天沒被
         # 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
-        # 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。---
+        # 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。
+        # 2026-07-30修正(跟strategy.html同步)：權重被壓到0(RANKED_OUT)那天其實已經是真的
+        # 賣出(當天dailyReturn就結算了)，不該延後到「正式從active移除」那天才記進trades/
+        # win_rate用的出場價，那樣entry_price/exit_price對不上真正變現的那一天。改成用權重
+        # 是否穿越0這個真實事件來配對trades，跟是否為新訊號脫鉤。---
         if active:
             combined_scores = pd.Series({t: a["score"] for t, a in active.items()})
             new_weights = allocate_weights(combined_scores, p)
@@ -650,14 +654,23 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 w = float(new_weights.get(t, 0.0))
                 old_w = drifted_at_open.get(t, 0.0)
                 is_fresh_signal = t in new_rows_by_ticker
-                if w > 1e-9 and t not in trade_entry:
-                    entry_price = a.get("entry_price_today") if is_fresh_signal else (
-                        stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan)
+                is_buy_crossing = w > 1e-9 and old_w <= 1e-9
+                is_sell_crossing = w <= 1e-9 and old_w > 1e-9
+                price_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+                if is_buy_crossing:
+                    entry_price = a.get("entry_price_today") if is_fresh_signal else price_now
                     trade_entry[t] = {"entry_date": day, "entry_price": entry_price}
+                if is_sell_crossing and t in trade_entry:
+                    te = trade_entry.pop(t)
+                    reason = "調降出場" if t in down_today else "排名擠出"
+                    trades.append({
+                        "ticker": t, "entry_date": te["entry_date"], "exit_date": day,
+                        "entry_price": te["entry_price"], "exit_price": price_now,
+                        "reason": reason,
+                    })
                 delta = w - old_w
                 if abs(delta) > 1e-9:
-                    price_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-                    reason = "QUALIFIED_UPGRADE" if (is_fresh_signal and old_w <= 1e-9) else ("RANKED_OUT" if w <= 1e-9 else "SIGNAL_REBALANCE")
+                    reason = "QUALIFIED_UPGRADE" if (is_buy_crossing and is_fresh_signal) else ("RANK_RECOVERED" if is_buy_crossing else ("RANKED_OUT" if is_sell_crossing else "SIGNAL_REBALANCE"))
                     orders.append({"date": day, "ticker": t, "side": "BUY" if delta > 0 else "SELL",
                                     "weight_before": old_w, "weight_after": w, "weight_change": delta,
                                     "price": price_now, "reason": reason})

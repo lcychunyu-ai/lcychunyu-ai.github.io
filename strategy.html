@@ -1358,7 +1358,15 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
     // --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
     // 固定資本每日平帳：總曝險才會真的每天都保證不超過maxPortfolioExposure。今天沒被
     // 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
-    // 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。---
+    // 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。
+    // 2026-07-30修正：權重被壓到0(RANKED_OUT)那天，事實上已經是真的賣出(這筆錢已經換
+    // 回現金、當天就結算進dailyReturn了)，不是延後幾天等正式從active移除才算數。原本
+    // trades[]/sellsToday只在「正式出場」(達目標價/調降/超天數)才收單，導致：(1)真正
+    // 賣出的那天使用者在「今日動作」跟買賣明細表完全看不到這筆交易 (2) win_rate/
+    // payoff_ratio用的trades[]拿「正式移除active那天」的價格當出場價，但那天可能早就
+    // 沒部位了，出場價跟真正賣出的價格對不起來。改成用「權重是否穿越0」這個真實事件來
+    // 判斷買賣，跟是否為「新訊號」脫鉤——不管有沒有新聞觸發，只要權重從0變正/從正變0，
+    // 當天就是真實的進出場，trades[]/sellsToday都要在那一天記錄。---
     if (active.size > 0) {
       const combined = [...active.entries()].map(([t, a]) => ({ ticker: t, score: a.score }));
       const newWeights = allocateWeights(combined, p);
@@ -1366,15 +1374,25 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
         const w = newWeights.get(t) || 0;
         const oldW = driftedAtOpen.get(t) || 0;
         const isFreshSignal = newRowsByTicker.has(t);
-        if (w > 1e-9 && !tradeEntry.has(t)) {
-          const entryPrice = isFreshSignal ? a.entryPriceToday : (PRICES_OPEN[t] ? PRICES_OPEN[t][i] : null);
+        const openArr = PRICES_OPEN[t];
+        const isBuyCrossing = w > 1e-9 && oldW <= 1e-9;
+        const isSellCrossing = w <= 1e-9 && oldW > 1e-9;
+        if (isBuyCrossing) {
+          const entryPrice = isFreshSignal ? a.entryPriceToday : (openArr ? openArr[i] : null);
           tradeEntry.set(t, { entryDate: day, entryPrice });
-          if (isFreshSignal) buysToday.push({ ticker: t, price: a.entryPriceToday, weight: w });
+          buysToday.push({ ticker: t, price: entryPrice, weight: w });
+        }
+        if (isSellCrossing && tradeEntry.has(t)) {
+          const te = tradeEntry.get(t);
+          tradeEntry.delete(t);
+          const exitPrice = openArr ? openArr[i] : null;
+          const reason = p.exitOnDown && downToday.has(t) ? '調降出場' : '排名擠出';
+          trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
+          sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
         }
         const delta = w - oldW;
         if (Math.abs(delta) > 1e-9) {
-          const openArr = PRICES_OPEN[t];
-          const reason = (isFreshSignal && oldW <= 1e-9) ? 'QUALIFIED_UPGRADE' : (w <= 1e-9 ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
+          const reason = isBuyCrossing ? (isFreshSignal ? 'QUALIFIED_UPGRADE' : 'RANK_RECOVERED') : (isSellCrossing ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
           orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
         }
         if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
@@ -1834,30 +1852,23 @@ function renderLedgerDetail() {
   // 「買進/賣出幾股」，使用者想確認整股(不取整張1,000股，算到單股無條件捨去)這條規則
   // 有沒有套用在買賣表上。股數算法跟持股表用同一個lotsFor()，買進用買進當時的權重/價格，
   // 賣出用出場前的權重(drifted weight)跟出場價。
-  // 2026-07-30再修正：加了股數欄位才發現——有些「賣出」列的權重是0、股數也是0。追查後
-  // 確認這不是bug：這檔股票達到出場條件(目標價/超過持有天數/調降)的當下，其實在前幾天
-  // 就已經被排名擠出、實際權重早就降到0了(對照同事引擎的active/weightNow雙軌設計，被
-  // 擠出的股票會留在資格池裡等機會、但當下權重是0)。這種「出場」只是把它從資格池正式
-  // 移除的帳務動作，交易員當天不需要真的賣出任何股票(手上根本沒有部位)，放在「當日
-  // 買賣」這種操作清單裡反而誤導。改成只在買賣表顯示「權重>0(有實際部位要處理)」的
-  // 賣出，權重已經是0的移到表格下方一行小字帶過，不佔用主要操作清單版面。
-  const actionableSells = r.sells.filter(s => s.weight != null && s.weight > 1e-9);
-  const zeroWeightSells = r.sells.filter(s => s.weight == null || s.weight <= 1e-9);
+  // 2026-07-30修正：權重穿越0的當下(不管是不是新訊號觸發)現在就會產生真正的sellsToday
+  // 記錄(見runBacktest()裡isSellCrossing那段)，所以買賣表看到的賣出列，一定是「當天真的
+  // 把部位換回現金」的那一天，不會再有權重0、股數0的空殼賣出列——之前那種「排名擠出當下
+  // 沒紀錄，等幾天後正式從資格池移除才補一筆權重0的賣出」的延遲/失真問題已經在源頭解決，
+  // 不需要再把賣出拆成「可操作」跟「空殼」兩組個別處理。
   const buySellRows = [
     ...r.buys.map(b => {
       const shares = lotsFor(b.weight, capital, b.price);
       return `<tr><td><span class="tag buy">買進</span></td><td><b>${tickerLabel(b.ticker)}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono">—</td><td>符合調升條件</td></tr>`;
     }),
-    ...actionableSells.map(s => {
+    ...r.sells.map(s => {
       const pnlPct = (s.entryPrice != null && s.exitPrice != null && s.entryPrice !== 0) ? (s.exitPrice / s.entryPrice - 1) * 100 : null;
       const priceLabel = (s.entryPrice != null && s.exitPrice != null) ? `${s.entryPrice.toLocaleString()} → ${s.exitPrice.toLocaleString()}` : (s.exitPrice != null ? s.exitPrice.toLocaleString() : '—');
       const shares = lotsFor(s.weight, capital, s.exitPrice);
       return `<tr><td><span class="tag sell">賣出</span></td><td><b>${tickerLabel(s.ticker)}</b></td><td class="mono">${priceLabel}</td><td class="mono">${fmtPct(s.weight * 100)}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono ${pnlPct != null && pnlPct >= 0 ? 'up' : 'down'}" style="color:${pnlPct != null ? (pnlPct >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td><td>${s.reason}</td></tr>`;
     }),
   ].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">今日無買賣</td></tr>';
-  const zeroWeightSellsNote = zeroWeightSells.length
-    ? `<p style="font-size:10.5px; color:var(--ink-faint); margin:6px 0 0;">另有${zeroWeightSells.length}檔（${zeroWeightSells.map(s => tickerLabel(s.ticker)).join('、')}）今天正式從資格池移除（${[...new Set(zeroWeightSells.map(s=>s.reason))].join('／')}），但這幾天前就已經被排名擠出、目前權重是0，手上沒有部位可賣，不算真正的交易動作。</p>`
-    : '';
 
   // 2026-07-29重寫：原本隔夜段/盤中段各自一整套列(同一檔股票出現兩次)，跟上面「當日
   // 持股」表視覺上很像(都是股票+權重+價格)，使用者掃過去容易覺得「這兩張表是不是在
@@ -1931,7 +1942,6 @@ function renderLedgerDetail() {
           <thead><tr><th>動作</th><th>股票</th><th>成交價（賣出：進場→出場）</th><th>權重</th><th>股數</th><th>損益</th><th>原因</th></tr></thead>
           <tbody>${buySellRows}</tbody>
         </table>
-        ${zeroWeightSellsNote}
       </div>
     </div>
 
