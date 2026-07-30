@@ -467,7 +467,7 @@
 
   <section id="heat-section">
     <h2 class="section-label" id="heat-section-label">產業熱力排行 · 依溫度%排序（非新聞覆蓋量）· 點選下鑽至個股</h2>
-    <div class="heat-header"><span>產業</span><span class="c2">調降</span><span class="c3">調升</span><span>樣本數</span></div>
+    <div class="heat-header"><span>產業</span><span class="c2">調降</span><span class="c3">調升</span><span>熱度佔比</span></div>
     <div class="heat-list" id="heat-list"></div>
   </section>
 
@@ -911,14 +911,21 @@ function renderHeat() {
     return;
   }
   const maxTemp = Math.max(...industries.map(i => single ? Math.abs(i[dirKey].temp) : Math.max(Math.abs(i.up.temp), Math.abs(i.down.temp))), 0.01);
+  // 2026-07-30再修正：最右欄原本顯示「N篇」，是個沒有基準點的絕對數字，看不出這個
+  // 產業佔了本期「新聞熱度」的多大比重。改成佔比%(該產業篇數 / 本期所有上榜產業
+  // 總篇數)——這才是真正回答「熱度集中在哪些產業」的問法，跟長條圖的「溫度%」是
+  // 兩個不同維度：溫度%答的是「這個產業的訊號有多強」，這欄答的是「這個產業的討論
+  // 熱度佔了整體多少比重」，兩者合看才完整。
+  const totalCount = industries.reduce((sum, i) => sum + (single ? i[dirKey].count : (i.up.count + i.down.count)), 0) || 1;
 
   industries.forEach(ind => {
     const row = document.createElement('div');
     const sampleCount = single ? ind[dirKey].count : (ind.up.count + ind.down.count);
+    const sharePct = sampleCount / totalCount * 100;
     const lowConf = sampleCount < HEAT_LOW_CONFIDENCE_COUNT;
     row.className = 'heat-row' + (activeIndustry === ind.name ? ' active' : '') + (lowConf ? ' low-confidence' : '');
     row.tabIndex = 0;
-    if (lowConf) row.title = '樣本數過少，溫度數字可能不穩定，僅供參考';
+    row.title = (lowConf ? '樣本數過少，溫度數字可能不穩定，僅供參考。' : '') + `本期共${sampleCount}篇，佔上榜產業總篇數${sharePct.toFixed(1)}%`;
     const lowConfTag = lowConf ? '<span class="low-conf-tag">樣本少</span>' : '';
     if (single) {
       const t = ind[dirKey].temp;
@@ -926,7 +933,7 @@ function renderHeat() {
       row.innerHTML = `
         <span class="name">${ind.name}${lowConfTag}</span>
         <div class="heat-bars-single ${barCls}"><div class="bar ${barCls}" style="width:${(Math.abs(t)/maxTemp*100).toFixed(1)}%"></div><span class="bar-label mono">${t}%</span></div>
-        <span class="weight mono">${sampleCount}篇</span>
+        <span class="weight mono">${sharePct.toFixed(1)}%</span>
       `;
     } else {
       const upT = ind.up.temp, downT = ind.down.temp;
@@ -934,7 +941,7 @@ function renderHeat() {
         <span class="name">${ind.name}${lowConfTag}</span>
         <div class="heat-bars"><div class="half left">${downT ? `<div class="bar down" style="width:${(Math.abs(downT)/maxTemp*100).toFixed(1)}%"></div>` : ''}</div><div class="half right"></div></div>
         <div class="heat-bars"><div class="half left"></div><div class="half right">${upT ? `<div class="bar up" style="width:${(Math.abs(upT)/maxTemp*100).toFixed(1)}%"></div>` : ''}</div></div>
-        <span class="weight mono">${sampleCount}篇</span>
+        <span class="weight mono">${sharePct.toFixed(1)}%</span>
       `;
     }
     row.addEventListener('click', () => {
