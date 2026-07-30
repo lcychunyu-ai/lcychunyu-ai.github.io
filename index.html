@@ -173,7 +173,7 @@
 
   .heat-list { display: flex; flex-direction: column; gap: 3px; }
   .heat-row {
-    display: grid; grid-template-columns: 108px 1fr 1fr 84px; align-items: center; gap: 10px;
+    display: grid; grid-template-columns: 108px 1fr 74px; align-items: center; gap: 10px;
     padding: 9px 12px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
     background: transparent; transition: background .12s ease, border-color .12s ease;
   }
@@ -190,13 +190,16 @@
   .heat-bars .bar { height: 12px; border-radius: 3px; align-self: center; }
   .heat-bars .bar.down { background: var(--down); }
   .heat-bars .bar.up { background: var(--up); }
-  .heat-row .weight { font-size: 12px; color: var(--ink-dim); text-align: right; }
+  .heat-row .weight { font-size: 12px; font-weight: 700; color: var(--ink-dim); text-align: right; }
+  .heat-row .weight.up { color: var(--up); }
+  .heat-row .weight.down { color: var(--down); }
   .heat-header {
-    display: grid; grid-template-columns: 108px 1fr 1fr 84px; gap: 10px; padding: 0 12px 6px;
+    display: grid; grid-template-columns: 108px 1fr 74px; gap: 10px; padding: 0 12px 6px;
     font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink-faint); text-transform: uppercase;
   }
-  .heat-header .c2 { text-align: right; }
-  .heat-header .c3 { text-align: left; }
+  .heat-header .c2 { text-align: center; }
+  .heat-header .c3 { text-align: right; }
+  .heat-caption { font-size: 12px; color: var(--ink-dim); margin: -4px 0 12px; }
 
   /* breadcrumb */
   .crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
@@ -466,8 +469,9 @@
   </section>
 
   <section id="heat-section">
-    <h2 class="section-label" id="heat-section-label">產業熱力排行 · 依溫度%排序（非新聞覆蓋量）· 點選下鑽至個股</h2>
-    <div class="heat-header"><span>產業</span><span class="c2">調降</span><span class="c3">調升</span><span>熱度佔比</span></div>
+    <h2 class="section-label" id="heat-section-label">產業熱力排行 · 點選下鑽至個股</h2>
+    <div class="heat-caption">由熱到冷排序：分析師平均一次調升/調降多少%目標價，數字越大代表該產業現在情緒波動越劇烈（不分方向，越紅越偏多、越綠越偏空）</div>
+    <div class="heat-header"><span>產業</span><span class="c2">調降 ← 溫度 → 調升</span><span class="c3">溫度</span></div>
     <div class="heat-list" id="heat-list"></div>
   </section>
 
@@ -749,7 +753,10 @@ function computeIndustryHeat(unifiedEvents) {
     });
     return { count: list.length, weight: sumW, temp: sumW ? +(sumWeighted / sumW * 100).toFixed(2) : 0 };
   }
-  return Object.entries(map).map(([name, g]) => ({ name, up: agg(g.UP), down: agg(g.DOWN) }));
+  // overall：把UP+DOWN合成同一份清單直接算一個加權平均，不是up.temp+down.temp相加
+  // (那是兩個不同子集合各自的條件平均數，加起來沒有乾淨的統計意義)。這才是「不分
+  // 方向、這個產業現在的訊號平均而言有多強」的唯一一個數字，拿來排序/當熱力值。
+  return Object.entries(map).map(([name, g]) => ({ name, up: agg(g.UP), down: agg(g.DOWN), overall: agg(g.UP.concat(g.DOWN)) }));
 }
 
 function fmtDelta(curr, prev, hasPrev) {
@@ -800,7 +807,7 @@ function renderNarrative() {
   document.querySelector('.temp-card.up').classList.toggle('dimmed', filterDirection === 'DOWN');
   document.querySelector('.temp-card.down').classList.toggle('dimmed', filterDirection === 'UP');
 
-  document.getElementById('heat-section-label').textContent = `產業熱力排行（${rangeLabel}） · 依溫度%排序（非新聞覆蓋量） · 點選下鑽至個股`;
+  document.getElementById('heat-section-label').textContent = `產業熱力排行（${rangeLabel}） · 點選下鑽至個股`;
   document.getElementById('sentiment-section-label').textContent = `分析師市場情緒（${rangeLabel}） · 評等結構與分歧度`;
 
   renderSentiment(winRevisions);
@@ -881,13 +888,13 @@ function renderSentiment(winRevisions) {
 }
 
 // ---------- industry heat (L1), recomputed on filter change ----------
-// 2026-07-30修正：原本排序跟長條圖長度都依「weight」(該產業被調升/調降的分析師人數
-// 總和)，這是FactSet覆蓋量指標、不是情緒強度指標——半導體/電子零組件永遠在排行榜
-// 最前面，只是因為這兩個產業本來就被最多分析師追蹤、新聞量最大，不代表「情緒」最熱。
-// 改成依「溫度」(temp，加權平均目標價變動%，本來就已經算好，只是沒被拿來排序/畫圖)
-// 排序跟畫長條，才是真正回答「哪個產業現在最熱」的問題。weight/count改成拿來標示
-// 樣本可信度——篇數太少(<3篇)的產業淡化顯示並加註記，讓使用者自己判斷這個溫度數字
-// 有沒有統計把握，不是直接拿掉(小產業的極端訊號本身也是有意義的資訊)。
+// 2026-07-30三修：v1排序/長條依weight(分析師覆蓋量)，半導體永遠第一，跟情緒無關。
+// v2改成依溫度%排序，但同時又加一欄「熱度佔比%」，兩個百分比並排使用者反而看不懂
+// 誰是「熱度」——這正是本section的核心教訓：一個排行榜只能有一個清楚定義的排序
+// 指標，多加一個「補充維度」看似資訊更完整，實際上是製造混淆。改回只留一個數字：
+// 「溫度」(不分方向的加權平均目標價變動%，來自computeIndustryHeat()的overall)，
+// 由熱到冷排序，數字越大代表情緒波動越劇烈；方向(多頭/空頭)用顏色(紅/綠)表達，
+// 不再需要額外的佔比欄位。樣本數只留做低信賴度的淡化提示，不當成獨立指標呈現。
 const HEAT_LOW_CONFIDENCE_COUNT = 3;
 function renderHeat() {
   const heatNow = computeIndustryHeat(rangeFilteredUnifiedEvents());
@@ -901,8 +908,8 @@ function renderHeat() {
       .sort((a,b) => Math.abs(b[dirKey].temp) - Math.abs(a[dirKey].temp));
   } else {
     industries = heatNow
-      .filter(h => h.up.weight > 0 || h.down.weight > 0)
-      .sort((a,b) => Math.abs(b.up.temp + b.down.temp) - Math.abs(a.up.temp + a.down.temp));
+      .filter(h => h.overall.weight > 0)
+      .sort((a,b) => Math.abs(b.overall.temp) - Math.abs(a.overall.temp));
   }
 
   heatEl.innerHTML = '';
@@ -910,38 +917,36 @@ function renderHeat() {
     heatEl.innerHTML = '<div class="empty-state">此區間無符合條件的目標價修正樣本</div>';
     return;
   }
-  const maxTemp = Math.max(...industries.map(i => single ? Math.abs(i[dirKey].temp) : Math.max(Math.abs(i.up.temp), Math.abs(i.down.temp))), 0.01);
-  // 2026-07-30再修正：最右欄原本顯示「N篇」，是個沒有基準點的絕對數字，看不出這個
-  // 產業佔了本期「新聞熱度」的多大比重。改成佔比%(該產業篇數 / 本期所有上榜產業
-  // 總篇數)——這才是真正回答「熱度集中在哪些產業」的問法，跟長條圖的「溫度%」是
-  // 兩個不同維度：溫度%答的是「這個產業的訊號有多強」，這欄答的是「這個產業的討論
-  // 熱度佔了整體多少比重」，兩者合看才完整。
-  const totalCount = industries.reduce((sum, i) => sum + (single ? i[dirKey].count : (i.up.count + i.down.count)), 0) || 1;
+  const maxTemp = Math.max(...industries.map(i => Math.abs(single ? i[dirKey].temp : i.overall.temp)), 0.01);
 
   industries.forEach(ind => {
     const row = document.createElement('div');
-    const sampleCount = single ? ind[dirKey].count : (ind.up.count + ind.down.count);
-    const sharePct = sampleCount / totalCount * 100;
+    const t = single ? ind[dirKey].temp : ind.overall.temp;
+    const sampleCount = single ? ind[dirKey].count : ind.overall.count;
     const lowConf = sampleCount < HEAT_LOW_CONFIDENCE_COUNT;
     row.className = 'heat-row' + (activeIndustry === ind.name ? ' active' : '') + (lowConf ? ' low-confidence' : '');
     row.tabIndex = 0;
-    row.title = (lowConf ? '樣本數過少，溫度數字可能不穩定，僅供參考。' : '') + `本期共${sampleCount}篇，佔上榜產業總篇數${sharePct.toFixed(1)}%`;
+    row.title = (lowConf ? '樣本數過少，溫度數字可能不穩定，僅供參考。' : '') + `本期共${sampleCount}篇`;
     const lowConfTag = lowConf ? '<span class="low-conf-tag">樣本少</span>' : '';
     if (single) {
-      const t = ind[dirKey].temp;
       const barCls = dirKey;
       row.innerHTML = `
         <span class="name">${ind.name}${lowConfTag}</span>
-        <div class="heat-bars-single ${barCls}"><div class="bar ${barCls}" style="width:${(Math.abs(t)/maxTemp*100).toFixed(1)}%"></div><span class="bar-label mono">${t}%</span></div>
-        <span class="weight mono">${sharePct.toFixed(1)}%</span>
+        <div class="heat-bars-single ${barCls}"><div class="bar ${barCls}" style="width:${(Math.abs(t)/maxTemp*100).toFixed(1)}%"></div></div>
+        <span class="weight mono ${barCls}">${t}%</span>
       `;
     } else {
-      const upT = ind.up.temp, downT = ind.down.temp;
+      // 單一發散長條：正溫度(偏多頭)從中軸往右畫紅色、負溫度(偏空頭)從中軸往左畫
+      // 綠色，跟上面「評等結構隨時間變化」用同一套視覺語言(中軸+左右發散)，同一個
+      // 網站內看到同樣的圖形語法就知道怎麼讀，不用每個板塊重新學一次。
+      const halfPct = Math.abs(t) / maxTemp * 50;
+      const seg = t >= 0
+        ? `<div class="rtr-seg bull" style="left:50%; width:${halfPct.toFixed(2)}%;"></div>`
+        : `<div class="rtr-seg bear" style="left:${(50 - halfPct).toFixed(2)}%; width:${halfPct.toFixed(2)}%;"></div>`;
       row.innerHTML = `
         <span class="name">${ind.name}${lowConfTag}</span>
-        <div class="heat-bars"><div class="half left">${downT ? `<div class="bar down" style="width:${(Math.abs(downT)/maxTemp*100).toFixed(1)}%"></div>` : ''}</div><div class="half right"></div></div>
-        <div class="heat-bars"><div class="half left"></div><div class="half right">${upT ? `<div class="bar up" style="width:${(Math.abs(upT)/maxTemp*100).toFixed(1)}%"></div>` : ''}</div></div>
-        <span class="weight mono">${sharePct.toFixed(1)}%</span>
+        <div class="rtr-track"><div class="rtr-axis"></div>${seg}</div>
+        <span class="weight mono ${t >= 0 ? 'up' : 'down'}">${t > 0 ? '+' : ''}${t}%</span>
       `;
     }
     row.addEventListener('click', () => {
