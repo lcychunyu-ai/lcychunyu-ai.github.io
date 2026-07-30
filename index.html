@@ -324,6 +324,18 @@
   .rating-legend .neutral-dot { background: var(--ink-faint); }
   .rating-legend .bear-dot { background: var(--down); }
   .rating-legend b { color: var(--ink); font-weight: 700; }
+  .rtr-rows { display: flex; flex-direction: column; gap: 7px; }
+  .rtr-row { display: grid; grid-template-columns: 78px 1fr 52px; align-items: center; gap: 10px; cursor: default; }
+  .rtr-label { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; font-family: ui-monospace, monospace; }
+  .rtr-track { position: relative; height: 16px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .rtr-axis { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--border); z-index: 1; }
+  .rtr-seg { position: absolute; top: 0; bottom: 0; }
+  .rtr-seg.bull { background: var(--up); border-radius: 0 3px 3px 0; }
+  .rtr-seg.bear { background: var(--down); border-radius: 3px 0 0 3px; }
+  .rtr-seg.neutral { background: var(--ink-faint); opacity: .5; }
+  .rtr-net { font-size: 11px; text-align: right; color: var(--ink-dim); }
+  .rtr-net.up { color: var(--up); }
+  .rtr-net.down { color: var(--down); }
 
   .divergence-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
   .divergence-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
@@ -634,16 +646,16 @@ function computeTemps(unifiedEvents) {
   return { up: agg(groups.UP), down: agg(groups.DOWN) };
 }
 
-// ---------- 評等結構隨時間變化(2026-07-30改版)：第一版用折線圖畫「溫度」隨時間變化，
-// 使用者反饋看不直觀——折線圖適合看單一數值的走勢，但「評等結構正在轉變」這件事
-// 本質上是「三個類別的佔比此消彼長」，人眼天生更容易從堆疊長條的色塊面積變化讀出
-// 「樂觀的紅色正在縮小、悲觀的綠色正在變大」，不需要先理解Y軸數字才能判讀。改成
-// 每個時間桶畫一條100%堆疊長條(積極樂觀/保持中立/保守悲觀三色疊起來)，直接複用
-// 靜態「評等結構」卡片本來就有的rating_bullish/neutral/bearish欄位跟顏色語意，
-// 只是多了時間這個維度，新舊兩張卡片講的是同一件事、不會互相矛盾。
+// ---------- 評等結構隨時間變化(2026-07-30三版)：v1折線圖看不出「此消彼長」，v2改成
+// 直向100%堆疊長條，但桶數跟著區間長度變(90天切到12桶以上)，格子太多太密、視覺雜亂。
+// v3改成固定抓6個時間桶(不管選的區間多長，桶數不變、只有每桶涵蓋的天數變)，避免
+// 使用者一次要看太多欄位；圖表也改成橫向、由上到下(新到舊)排列，搭配中軸的左右發散
+// 長條(diverging bar，保持中立置中對齊軸線、積極樂觀往右展開、保守悲觀往左展開)，
+// 比直向長條更適合放進卡片寬度、也更接近使用者要的「橫的長條圖+中軸」呈現方式。
 function computeRatingTrendSeries(tpEvents) {
   const rangeDays = RANGE_DAYS[filterRange] || 30;
-  const bucketDays = rangeDays <= 7 ? 1 : (rangeDays <= 30 ? 2 : 7);
+  const TARGET_BUCKETS = 6;
+  const bucketDays = Math.max(1, Math.ceil(rangeDays / TARGET_BUCKETS));
   const byBucket = {};
   tpEvents.forEach(r => {
     const daysAgo = Math.round((new Date(MAX_DATE + 'T00:00:00') - new Date(r.date + 'T00:00:00')) / 86400000);
@@ -671,6 +683,10 @@ function computeRatingTrendSeries(tpEvents) {
     });
 }
 
+// 橫向發散長條(diverging bar)：保持中立置中對齊中軸(左右對稱)，積極樂觀從軸線往右
+// 展開、保守悲觀從軸線往左展開——三個類別佔比固定加總100%，所以不管怎麼分，紅色
+// 右緣跟綠色左緣一定落在軸線±100%的範圍內，用HTML/CSS的絕對定位百分比就能畫，
+// 不需要SVG，橫向排列由上到下＝由新到舊，一眼掃過去比直向長條更省版面、更不雜亂。
 function renderRatingTrendChart(container, legendEl, series) {
   const hasData = series.some(s => s.total > 0);
   if (!hasData) {
@@ -678,64 +694,43 @@ function renderRatingTrendChart(container, legendEl, series) {
     legendEl.innerHTML = '';
     return;
   }
-  const W = 900, H = 180, padL = 32, padR = 14, padT = 10, padB = 28;
-  const n = series.length;
-  const bandW = (W - padL - padR) / n;
-  const barW = Math.max(4, bandW * 0.62);
-  const y0 = H - padB, plotH = H - padT - padB;
-
-  const bullColor = cssVar('--up'), neutralColor = cssVar('--ink-faint'), bearColor = cssVar('--down'), inkFaint = cssVar('--ink-faint'), gridColor = cssVar('--grid');
-
-  let gridLines = '';
-  [0, 25, 50, 75, 100].forEach(p => {
-    const gy = padT + (1 - p / 100) * plotH;
-    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
-    gridLines += `<text x="${padL-6}" y="${(gy+3).toFixed(1)}" font-size="9" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${p}%</text>`;
-  });
-
-  let bars = '', xLabels = '';
-  const labelStep = Math.max(1, Math.ceil(n / 10));
-  series.forEach((s, i) => {
-    const cx = padL + bandW * i + bandW / 2;
-    const x0 = cx - barW / 2;
+  const rows = series.slice().reverse(); // 由新到舊，最新的一桶排在最上面
+  let rowsHtml = '';
+  rows.forEach((s, i) => {
+    const netTilt = s.total ? +(s.bullPct - s.bearPct).toFixed(0) : null;
+    const netCls = netTilt == null ? '' : (netTilt > 0 ? 'up' : (netTilt < 0 ? 'down' : ''));
+    const netLabel = netTilt == null ? '—' : `${netTilt > 0 ? '+' : ''}${netTilt}pp`;
+    let track = '<div class="rtr-axis"></div>';
     if (s.total > 0) {
-      // 由下往上疊：保守悲觀(綠) → 保持中立(灰) → 積極樂觀(紅)。紅色區塊縮小時，
-      // 視覺上會從長條最上方往下退，對應「情緒正在退燒」這個直覺方向。
-      const bearH = s.bearPct / 100 * plotH;
-      const neutralH = s.neutralPct / 100 * plotH;
-      const bullH = s.bullPct / 100 * plotH;
-      const bearY = y0 - bearH;
-      const neutralY = bearY - neutralH;
-      const bullY = neutralY - bullH;
-      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${bearY.toFixed(1)}" width="${barW.toFixed(1)}" height="${bearH.toFixed(1)}" fill="${bearColor}"/>`;
-      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${neutralY.toFixed(1)}" width="${barW.toFixed(1)}" height="${neutralH.toFixed(1)}" fill="${neutralColor}" opacity="0.55"/>`;
-      bars += `<rect class="seg" data-i="${i}" x="${x0.toFixed(1)}" y="${bullY.toFixed(1)}" width="${barW.toFixed(1)}" height="${bullH.toFixed(1)}" fill="${bullColor}"/>`;
+      const neutralHalf = s.neutralPct / 4;   // 中立寬度的一半，換算成軸線兩側各佔的百分比
+      const bullW = s.bullPct / 2;
+      const bearW = s.bearPct / 2;
+      track += `<div class="rtr-seg neutral" style="left:${(50 - neutralHalf).toFixed(2)}%; width:${(neutralHalf * 2).toFixed(2)}%;"></div>`;
+      track += `<div class="rtr-seg bull" style="left:${(50 + neutralHalf).toFixed(2)}%; width:${bullW.toFixed(2)}%;"></div>`;
+      track += `<div class="rtr-seg bear" style="left:${(50 - neutralHalf - bearW).toFixed(2)}%; width:${bearW.toFixed(2)}%;"></div>`;
     }
-    if (i % labelStep === 0 || i === n - 1) {
-      xLabels += `<text x="${cx.toFixed(1)}" y="${H-8}" font-size="9" fill="${inkFaint}" text-anchor="middle">${s.date}</text>`;
-    }
+    rowsHtml += `
+      <div class="rtr-row" data-i="${i}">
+        <span class="rtr-label">${s.date}</span>
+        <div class="rtr-track">${track}</div>
+        <span class="rtr-net mono ${netCls}">${netLabel}</span>
+      </div>`;
   });
-
-  const svgId = 'ratetrend' + Math.random().toString(36).slice(2, 9);
-  container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    ${gridLines}${bars}${xLabels}
-  </svg>`;
+  container.innerHTML = `<div class="rtr-rows">${rowsHtml}</div>`;
   legendEl.innerHTML = `
-    <span><span class="dot bull-dot"></span>積極樂觀</span>
-    <span><span class="dot neutral-dot"></span>保持中立</span>
-    <span><span class="dot bear-dot"></span>保守悲觀</span>
-    <span style="color:var(--ink-faint);">每欄＝一個時間區間的評等佔比；空白欄代表該區間無樣本</span>
+    <span><span class="dot bear-dot"></span>保守悲觀 ← 中軸 → <span class="dot bull-dot"></span>積極樂觀</span>
+    <span><span class="dot neutral-dot"></span>保持中立（置中）</span>
+    <span style="color:var(--ink-faint);">右側「pp」＝樂觀−悲觀佔比差，正值代表整體偏多頭</span>
   `;
 
-  const svg = document.getElementById(svgId);
-  svg.querySelectorAll('.seg').forEach(seg => {
-    seg.style.cursor = 'pointer';
-    seg.addEventListener('mousemove', (evt) => {
-      const i = Number(seg.dataset.i);
-      const s = series[i];
+  container.querySelectorAll('.rtr-row').forEach(row => {
+    row.addEventListener('mousemove', (evt) => {
+      const i = Number(row.dataset.i);
+      const s = rows[i];
+      if (!s.total) { showTip(evt, `<b>${s.date}</b><br/>此區間無評等資料`); return; }
       showTip(evt, `<b>${s.date}</b><br/>積極樂觀 ${s.bull}（${s.bullPct.toFixed(0)}%）<br/>保持中立 ${s.neutral}（${s.neutralPct.toFixed(0)}%）<br/>保守悲觀 ${s.bear}（${s.bearPct.toFixed(0)}%）<br/>樣本：${s.total}人次`);
     });
-    seg.addEventListener('mouseleave', hideTip);
+    row.addEventListener('mouseleave', hideTip);
   });
 }
 
