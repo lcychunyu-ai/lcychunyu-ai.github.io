@@ -1802,14 +1802,22 @@ function renderLedgerDetail() {
   // 拿PRICES(收盤價)重算的，跟策略規則(出場在開盤價執行)對不上——改用sellsToday記錄的
   // entryPrice/exitPrice(執行時當下就存好的真實開盤價)直接算損益%，賣出列補上「進場價→
   // 出場價」跟「損益%」兩欄，才回答得出「賣出什麼股票、賣在哪裡、賺賠多少」這個問題。
+  // 2026-07-30新增：買賣表補上「股數」欄位——之前只有當日持股表有算股數，買賣表看不出
+  // 「買進/賣出幾股」，使用者想確認整股(不取整張1,000股，算到單股無條件捨去)這條規則
+  // 有沒有套用在買賣表上。股數算法跟持股表用同一個lotsFor()，買進用買進當時的權重/價格，
+  // 賣出用出場前的權重(drifted weight)跟出場價。
   const buySellRows = [
-    ...r.buys.map(b => `<tr><td><span class="tag buy">買進</span></td><td><b>${tickerLabel(b.ticker)}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td class="mono">—</td><td>符合調升條件</td></tr>`),
+    ...r.buys.map(b => {
+      const shares = lotsFor(b.weight, capital, b.price);
+      return `<tr><td><span class="tag buy">買進</span></td><td><b>${tickerLabel(b.ticker)}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono">—</td><td>符合調升條件</td></tr>`;
+    }),
     ...r.sells.map(s => {
       const pnlPct = (s.entryPrice != null && s.exitPrice != null && s.entryPrice !== 0) ? (s.exitPrice / s.entryPrice - 1) * 100 : null;
       const priceLabel = (s.entryPrice != null && s.exitPrice != null) ? `${s.entryPrice.toLocaleString()} → ${s.exitPrice.toLocaleString()}` : (s.exitPrice != null ? s.exitPrice.toLocaleString() : '—');
-      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${tickerLabel(s.ticker)}</b></td><td class="mono">${priceLabel}</td><td class="mono">${s.weight != null ? fmtPct(s.weight * 100) : '—'}</td><td class="mono ${pnlPct != null && pnlPct >= 0 ? 'up' : 'down'}" style="color:${pnlPct != null ? (pnlPct >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td><td>${s.reason}</td></tr>`;
+      const shares = lotsFor(s.weight, capital, s.exitPrice);
+      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${tickerLabel(s.ticker)}</b></td><td class="mono">${priceLabel}</td><td class="mono">${s.weight != null ? fmtPct(s.weight * 100) : '—'}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono ${pnlPct != null && pnlPct >= 0 ? 'up' : 'down'}" style="color:${pnlPct != null ? (pnlPct >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td><td>${s.reason}</td></tr>`;
     }),
-  ].join('') || '<tr><td colspan="6" style="color:var(--ink-faint);">今日無買賣</td></tr>';
+  ].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">今日無買賣</td></tr>';
 
   // 2026-07-29重寫：原本隔夜段/盤中段各自一整套列(同一檔股票出現兩次)，跟上面「當日
   // 持股」表視覺上很像(都是股票+權重+價格)，使用者掃過去容易覺得「這兩張表是不是在
@@ -1880,7 +1888,7 @@ function renderLedgerDetail() {
       </div>
       <div class="table-wrap">
         <table class="book-table">
-          <thead><tr><th>動作</th><th>股票</th><th>成交價（賣出：進場→出場）</th><th>權重</th><th>損益</th><th>原因</th></tr></thead>
+          <thead><tr><th>動作</th><th>股票</th><th>成交價（賣出：進場→出場）</th><th>權重</th><th>股數</th><th>損益</th><th>原因</th></tr></thead>
           <tbody>${buySellRows}</tbody>
         </table>
       </div>
