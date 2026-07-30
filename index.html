@@ -1,3 +1,14 @@
+<script>
+  // 2026-07-30新增：一進頁面就先套用使用者上次選的深/淺色，趕在CSS渲染前設定好
+  // document.documentElement的data-theme屬性，避免「先閃一下系統預設色、才跳成
+  // 使用者選的顏色」的畫面閃爍(FOUC)。跟strategy.html共用同一個localStorage
+  // key「theme-pref」，兩個網站切一次、另一個網站也會套用同樣的深/淺色。
+  (function () {
+    const saved = localStorage.getItem('theme-pref');
+    const resolved = (saved === 'dark' || saved === 'light') ? saved : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.dataset.theme = resolved;
+  })();
+</script>
 <title>FactSet 台股修正溫度計</title>
 <style>
   @media (prefers-color-scheme: dark) {
@@ -82,6 +93,18 @@
     background: var(--panel-2); border: 1px solid var(--border); color: var(--ink-dim);
   }
   .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  /* 2026-07-30新增：淺色/深色切換按鈕，跟strategy.html同一套樣式跟邏輯。 */
+  .theme-toggle-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+    border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--ink-dim);
+    cursor: pointer; flex-shrink: 0; transition: border-color .12s ease, color .12s ease;
+  }
+  .theme-toggle-btn:hover { color: var(--ink); border-color: var(--accent); }
+  .theme-toggle-btn svg { width: 16px; height: 16px; }
+  .theme-toggle-btn .icon-moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-moon { display: block; }
 
   .filter-row {
     display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
@@ -338,6 +361,10 @@
         <a href="strategy.html" style="text-decoration:none; font-size:12.5px; font-weight:700; color:var(--ink-dim); padding:7px 16px; border-radius:100px;">策略回測</a>
       </div>
       <span class="badge"><span class="dot"></span>即時連線 · 最後查詢 <span id="updated-at" class="mono">—</span></span>
+      <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" title="切換淺色／深色">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
     </div>
   </header>
 
@@ -1433,4 +1460,12 @@ async function init() {
   }
 }
 init();
+
+// 2026-07-30新增：淺色/深色切換——跟strategy.html共用同一個localStorage key
+// 「theme-pref」，兩個網站切一次、另一個網站也會套用同樣的深/淺色。
+document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('theme-pref', next);
+});
 </script>

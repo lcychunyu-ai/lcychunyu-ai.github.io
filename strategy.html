@@ -4,6 +4,16 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>策略回測 · Revision Lab</title>
+<script>
+  // 2026-07-30新增：一進頁面就先套用使用者上次選的深/淺色，趕在CSS渲染前設定好
+  // document.documentElement的data-theme屬性，避免「先閃一下系統預設色、才跳成
+  // 使用者選的顏色」的畫面閃爍(FOUC)。放在<head>最前面、<style>之前執行。
+  (function () {
+    const saved = localStorage.getItem('theme-pref');
+    const resolved = (saved === 'dark' || saved === 'light') ? saved : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.dataset.theme = resolved;
+  })();
+</script>
 <style>
   @media (prefers-color-scheme: dark) {
     :root {
@@ -84,6 +94,20 @@
   .nav-pills a.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
   .status-tag { font-size: 11.5px; color: var(--ink-faint); display: flex; align-items: center; gap: 6px; }
   .status-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--safe); }
+
+  /* 2026-07-30新增：淺色/深色切換按鈕——原本CSS的--bg/--panel等token已經有
+     :root[data-theme="dark"]/[data-theme="light"]兩套覆寫值(當初做深色模式支援時
+     順手加的)，只是一直沒有按鈕可以切換，只能被動跟著系統設定走。這裡補上按鈕跟JS。 */
+  .theme-toggle-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+    border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--ink-dim);
+    cursor: pointer; flex-shrink: 0; transition: border-color .12s ease, color .12s ease;
+  }
+  .theme-toggle-btn:hover { color: var(--ink); border-color: var(--accent); }
+  .theme-toggle-btn svg { width: 16px; height: 16px; }
+  .theme-toggle-btn .icon-moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-moon { display: block; }
 
   section { margin-bottom: 22px; }
 
@@ -381,6 +405,10 @@
       <a href="strategy.html" class="active">策略回測</a>
     </div>
     <div class="status-tag"><span class="dot"></span>行情至 <span id="updated-at" class="mono">—</span></div>
+    <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" title="切換淺色／深色">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
   </header>
 
   <div id="loading-banner" class="empty-state" style="padding:60px 20px;">正在連線資料庫與載入股價資料…</div>
@@ -2009,6 +2037,15 @@ function scheduleAutoRun() {
   clearTimeout(autoRunTimer);
   autoRunTimer = setTimeout(() => runAndRenderManual(), 400);
 }
+// 2026-07-30新增：淺色/深色切換——按一下在light/dark之間切換，選擇存進localStorage，
+// 下次開頁面(含另一個網站strategy.html/index.html，兩邊都用同一個localStorage
+// key「theme-pref」)會直接套用，不用每次都重選。
+document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('theme-pref', next);
+});
+
 document.getElementById('param-panel').addEventListener('input', (evt) => {
   if (evt.target.id === 'p-capital') return;
   scheduleAutoRun();
