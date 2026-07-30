@@ -831,15 +831,19 @@ function renderSentiment(winRevisions) {
     legendEl.innerHTML = '<span>此區間無評等資料</span>';
   } else {
     const bullPct = bull / total * 100, neuPct = neu / total * 100, bearPct = bear / total * 100;
+    // 2026-07-30修正：原本順序是「樂觀(左)/中立/悲觀(右)」，跟下面評等結構趨勢圖、
+    // 產業熱力排行的發散長條(樂觀固定在中軸右側、悲觀固定在左側)左右相反，同一個
+    // 版面看到紅綠顏色兩種擺法，容易誤讀。改成悲觀(左)/中立/樂觀(右)，跟其他兩個
+    // 圖表統一同一套「紅在右、綠在左」的視覺語言。
     barEl.innerHTML = `
-      <div class="rating-seg bull" style="width:${bullPct}%"></div>
-      <div class="rating-seg neutral" style="width:${neuPct}%"></div>
       <div class="rating-seg bear" style="width:${bearPct}%"></div>
+      <div class="rating-seg neutral" style="width:${neuPct}%"></div>
+      <div class="rating-seg bull" style="width:${bullPct}%"></div>
     `;
     legendEl.innerHTML = `
-      <span><span class="dot bull-dot"></span>積極樂觀 <b>${bull}</b>（${bullPct.toFixed(0)}%）</span>
-      <span><span class="dot neutral-dot"></span>保持中立 <b>${neu}</b>（${neuPct.toFixed(0)}%）</span>
       <span><span class="dot bear-dot"></span>保守悲觀 <b>${bear}</b>（${bearPct.toFixed(0)}%）</span>
+      <span><span class="dot neutral-dot"></span>保持中立 <b>${neu}</b>（${neuPct.toFixed(0)}%）</span>
+      <span><span class="dot bull-dot"></span>積極樂觀 <b>${bull}</b>（${bullPct.toFixed(0)}%）</span>
     `;
   }
 
