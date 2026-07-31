@@ -490,7 +490,10 @@
             <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
             <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
           </div>
-          <div class="param-field"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="10" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+          <div class="param-row2">
+            <div class="param-field"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="0" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+            <div class="param-field" style="margin-bottom:0;"><label>移動停損</label><div class="input-suffix"><input type="number" id="p-trailingStop" value="12" step="1" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+          </div>
           <div class="param-row2">
             <div class="param-field"><label>分批停利門檻（進場到目標價的%）</label><div class="input-suffix"><input type="number" id="p-partialTakeThreshold" value="70" step="10" min="0" max="100"/><span class="suffix">%</span></div></div>
             <div class="param-field" style="margin-bottom:0;"><label>分批停利比例</label><div class="input-suffix"><input type="number" id="p-partialTakeFraction" value="30" step="10" min="0" max="100"/><span class="suffix">%，0=不啟用</span></div></div>
@@ -1379,6 +1382,19 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       else if (p.stopLossPct > 0 && priorClose != null && a.entryPriceToday != null
         && priorClose <= a.entryPriceToday * (1 - p.stopLossPct / 100)) reason = '停損出場';
       if (reason) toExit.push([t, reason]);
+      // 2026-08-01新增(實驗性)：移動停損——固定停損只保護「不要跌破進場價太多」，
+      // 一檔股票噴出一倍之後，固定停損還是停在起漲點附近，等於放著一大段已經賺到的
+      // 漲幅完全沒有下檔保護。改成追蹤「進場以來看過的最高收盤價」，停損點隨最高價
+      // 往上移動，鎖住已實現的漲幅——最高價還沒創新高前，行為等同固定停損(基準點是
+      // entryPriceToday)，一旦股價噴出，停損點自動跟著往上調，讓贏家有機會抱更久。
+      // trailingStopPct=0代表不啟用；跟固定停損可以同時開，誰先觸發用誰。
+      if (p.trailingStopPct > 0 && a.entryPriceToday != null && priorClose != null) {
+        a.highestClose = Math.max(a.highestClose ?? a.entryPriceToday, priorClose);
+        if (!reason && priorClose <= a.highestClose * (1 - p.trailingStopPct / 100)) {
+          reason = '移動停損出場';
+          toExit.push([t, reason]);
+        }
+      }
     }
     const sellsToday = [];
     for (const [t, reason] of toExit) {
@@ -1605,6 +1621,7 @@ function readParams() {
     minUpside: Number(document.getElementById('p-minUpside').value) / 100,
     maxHoldDays: Number(document.getElementById('p-maxHold').value),
     stopLossPct: Number(document.getElementById('p-stopLoss').value),
+    trailingStopPct: Number(document.getElementById('p-trailingStop').value),
     partialTakeThresholdPct: Number(document.getElementById('p-partialTakeThreshold').value),
     partialTakeFraction: Number(document.getElementById('p-partialTakeFraction').value) / 100,
     exitOnDown: document.getElementById('p-exitDown').checked,
