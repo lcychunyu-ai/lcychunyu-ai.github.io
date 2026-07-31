@@ -276,6 +276,9 @@
   table.book-table th { text-align: left; font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; padding: 7px 8px; border-bottom: 1px solid var(--border); }
   table.book-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
   table.book-table tr:hover td { background: var(--panel-2); }
+  table.book-table tr.low-confidence td { opacity: .5; }
+  table.book-table tr.low-confidence:hover td { opacity: .8; }
+  .low-conf-tag { font-size: 9px; font-weight: 600; color: var(--ink-faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; margin-left: 6px; vertical-align: middle; }
   .table-wrap { overflow-x: auto; }
   .tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 100px; }
   .tag.buy { background: var(--up-dim); color: var(--up); }
@@ -656,6 +659,24 @@
             <div class="param-field"><label>實際執行資金（元）</label><input type="number" id="p-capital" value="100000000" step="1000000"/></div>
           </div>
           <div id="ledger-detail"></div>
+        </section>
+
+        <!-- ===== PER-TICKER TRACK RECORD ===== -->
+        <section class="section-card" id="track-record-section" style="display:none;">
+          <div class="section-head">
+            <div><span class="eyebrow">Per-Ticker Track Record</span><h3>個股歷史表現</h3></div>
+          </div>
+          <p class="section-sub">全部股票共用左側同一組參數(不是逐檔各自找最佳參數)——如果之後想投資某一檔股票，這裡顯示的是「用我們驗證過的參數，這檔股票過去實際觸發過幾次訊號、表現如何」，不是重新幫這檔股票量身優化，避免單一股票樣本數太少(常常只有個位數次)反而overfitting。樣本數低於3次的會淡化顯示，僅供參考。</p>
+          <div class="filter-bar" style="margin-bottom:10px;">
+            <span class="filter-group-label">排序</span>
+            <select id="track-sort-select" class="sort-select">
+              <option value="count">交易次數</option>
+              <option value="winRate">勝率</option>
+              <option value="avgReturn">平均報酬</option>
+              <option value="avgHoldDays">平均持有天數</option>
+            </select>
+          </div>
+          <div id="track-record-holder"></div>
         </section>
 
         <div class="panel explainer" style="margin-bottom:0;" id="methodology-section">
@@ -1941,6 +1962,76 @@ function buildDailyExplanation(r, prevRow) {
     </div>`;
 }
 
+// ============================================================================
+// 個股歷史表現(2026-08-01新增)
+// ============================================================================
+// 不做per-ticker優化——每一檔股票都套用左側同一組(已經用滾動walk-forward驗證過的)
+// 參數，這裡只是描述性統計「這組參數套在這檔股票上，過去實際觸發過幾次訊號、
+// 表現如何」，不是重新幫這檔股票量身找一組專屬最佳參數。逐檔各自優化在樣本數
+// 通常只有個位數次的情況下，統計上非常不穩，容易overfitting；用共用參數看
+// 每檔股票自己的歷史track record，才是回答「以後投資這檔股票要用什麼參數看」
+// 這個問題不會引入額外overfitting風險的做法。直接複用runBacktest()回傳的
+// trades[]，不需要另外重跑。
+const TRACK_LOW_CONFIDENCE_COUNT = 3;
+let LAST_TRADES = [];
+function computePerTickerTrackRecord(trades) {
+  const byTicker = new Map();
+  trades.forEach(t => {
+    if (t.exitPrice == null || t.entryPrice == null) return;
+    if (!byTicker.has(t.ticker)) byTicker.set(t.ticker, []);
+    byTicker.get(t.ticker).push(t);
+  });
+  const rows = [];
+  for (const [ticker, list] of byTicker) {
+    const returns = list.map(t => (t.exitPrice - t.entryPrice) / t.entryPrice * 100);
+    const wins = returns.filter(r => r > 0).length;
+    const holdDays = list.map(t => {
+      const eIdx = dateIdxMap.get(t.entryDate), xIdx = dateIdxMap.get(t.exitDate);
+      return (eIdx != null && xIdx != null) ? (xIdx - eIdx) : null;
+    }).filter(d => d != null);
+    rows.push({
+      ticker, count: list.length,
+      winRate: wins / list.length * 100,
+      avgReturn: mean(returns),
+      avgHoldDays: holdDays.length ? mean(holdDays) : null,
+      lastExitDate: list.map(t => t.exitDate).sort().slice(-1)[0],
+    });
+  }
+  return rows;
+}
+function renderTrackRecord(trades) {
+  LAST_TRADES = trades;
+  const section = document.getElementById('track-record-section');
+  const holder = document.getElementById('track-record-holder');
+  const rows = computePerTickerTrackRecord(trades);
+  if (!rows.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  const sortKey = document.getElementById('track-sort-select').value;
+  const sorted = rows.slice().sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    return (bv == null ? -Infinity : bv) - (av == null ? -Infinity : av);
+  });
+  const rowsHtml = sorted.map(r => {
+    const lowConf = r.count < TRACK_LOW_CONFIDENCE_COUNT;
+    return `<tr class="${lowConf ? 'low-confidence' : ''}" ${lowConf ? 'title="樣本數過少，數字僅供參考"' : ''}>
+      <td><b>${tickerLabel(r.ticker)}</b>${lowConf ? '<span class="low-conf-tag">樣本少</span>' : ''}</td>
+      <td class="mono">${r.count}</td>
+      <td class="mono" style="color:${r.winRate >= 50 ? 'var(--up)' : 'var(--down)'};">${r.winRate.toFixed(0)}%</td>
+      <td class="mono" style="color:${r.avgReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.avgReturn)}</td>
+      <td class="mono">${r.avgHoldDays != null ? r.avgHoldDays.toFixed(1) : '—'}日</td>
+      <td class="mono">${r.lastExitDate}</td>
+    </tr>`;
+  }).join('');
+  holder.innerHTML = `
+    <div class="table-wrap">
+      <table class="book-table">
+        <thead><tr><th>股票</th><th>交易次數</th><th>勝率</th><th>平均報酬</th><th>平均持有天數</th><th>最近一次出場</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+document.getElementById('track-sort-select').addEventListener('change', () => renderTrackRecord(LAST_TRADES));
+
 function renderLedger(rows) {
   CURRENT_ROWS = rows;
   const section = document.getElementById('ledger-section');
@@ -2166,12 +2257,13 @@ function runAndRenderManual(bestExcessInfo) {
   const start = document.getElementById('p-start').value;
   const end = document.getElementById('p-end').value;
   const result = runBacktest(p, start, end);
-  const { rows, summary } = result;
+  const { rows, summary, trades } = result;
   renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS, rows);
   renderCoverage();
   renderCurve(rows);
   renderExcessCurve(rows);
   renderLedger(rows);
+  renderTrackRecord(trades);
   const rollingWindows = computeRollingWindows(p);
   renderRollingChart(document.getElementById('rolling-summary-holder'), document.getElementById('rolling-chart-holder'), rollingWindows);
   return { rows, summary };
