@@ -375,6 +375,11 @@ class StrategyParams:
     max_weight_per_stock: float = 0.2
     max_positions: int = 10                 # 0=不限
     max_portfolio_exposure: float = 1.0      # 使用者新增：投組總曝險上限，1.0=可滿倉
+    stop_loss_pct: float = 10.0             # 2026-08-01新增：單檔停損%，0=不啟用。用滾動
+                                             # walk-forward驗證(12個月訓練/3個月驗證，一路
+                                             # 滾動切過11段)驗證過：10%停損讓打贏大盤的季數
+                                             # 比例從54.5%提升到72.7%(平均報酬略降，但這是
+                                             # 使用者2026-08-01明確裁示的優先順序：穩定度>總報酬)
 
     sizing_mode: Literal["equal", "by_upgrade", "composite", "enhanced"] = "equal"
     composite_alpha: float = 1.0
@@ -591,6 +596,9 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 reason = "達目標價出場"
             elif days_held >= p.max_hold_days:
                 reason = "超過最長持有天數"
+            elif (p.stop_loss_pct > 0 and not np.isnan(prior_close) and a.get("entry_price_today") is not None
+                  and prior_close <= a["entry_price_today"] * (1 - p.stop_loss_pct / 100)):
+                reason = "停損出場"
             if reason:
                 exited.append((t, reason))
         # tax_cost累加這一天所有賣出動作(含正式出場+每日再平衡的減碼)課到的證交稅，

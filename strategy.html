@@ -487,6 +487,7 @@
             <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
             <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
           </div>
+          <div class="param-field" style="margin-bottom:0;"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="10" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
 
           <div class="param-field" style="margin-bottom:0;">
             <label>配置方式</label>
@@ -1312,6 +1313,12 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (p.exitOnDown && downToday.has(t)) reason = '調降出場';
       else if (p.exitOnTarget && priorClose != null && priorClose >= a.target) reason = '達目標價出場';
       else if (daysHeld >= p.maxHoldDays) reason = '超過最長持有天數';
+      // 2026-08-01新增：單檔停損——不影響選股/配置邏輯，純粹風控加法，跟其他機制互不
+      // 牽動，最適合單獨測試因果關係。用「訊號進場當天的參考價」(entryPriceToday)當基準，
+      // 不是target，判斷時用前一天收盤價(對照達目標價出場同樣的前視偏誤迴避邏輯)。
+      // stopLossPct=0代表不啟用。
+      else if (p.stopLossPct > 0 && priorClose != null && a.entryPriceToday != null
+        && priorClose <= a.entryPriceToday * (1 - p.stopLossPct / 100)) reason = '停損出場';
       if (reason) toExit.push([t, reason]);
     }
     const sellsToday = [];
@@ -1541,6 +1548,7 @@ function readParams() {
     minAnalystCount: Number(document.getElementById('p-minAnalyst').value),
     minUpside: Number(document.getElementById('p-minUpside').value) / 100,
     maxHoldDays: Number(document.getElementById('p-maxHold').value),
+    stopLossPct: Number(document.getElementById('p-stopLoss').value),
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,
     sizingMode: document.getElementById('p-sizing').value,
