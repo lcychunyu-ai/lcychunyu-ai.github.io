@@ -1312,7 +1312,15 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
 
     // --- 真出場檢查(對active資格池，不是只看今天有沒有權重)：達目標價用「前一天收盤價」
     // 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；持有天數用
-    // 交易日數，從active設定的entryIdx算起。---
+    // 交易日數，從active設定的entryIdx算起。
+    // 2026-07-31新增第四種出場條件「品質複查出場」：取消每日強制再平衡之後，一檔股票
+    // 只要沒有調降/沒到目標價/沒超過持有天數，就算它上漲空間早就所剩無幾(漲到只差臨門
+    // 一腳)，也會一路抱到底，除非剛好當天有更強的新訊號出現觸發頂替——但「剛好那天有
+    // 挑戰者」是機率事件，不是保證。改成每QUALITY_RECHECK_INTERVAL_DAYS個交易日，主動
+    // 檢查一次「這檔股票現在(用前一天收盤價+目前掛的目標價)還符不符合當初的最低上漲
+    // 空間門檻」，不符合就出場——這不是每天全面重排(不會製造大量交易)，只是低頻率地
+    // 把「已經沒故事」的持股清掉，讓資金能流向真正還有空間的標的。---
+    const QUALITY_RECHECK_INTERVAL_DAYS = 5;
     const toExit = [];
     for (const [t, a] of active) {
       const daysHeld = i - a.entryIdx;
@@ -1322,6 +1330,10 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (p.exitOnDown && downToday.has(t)) reason = '調降出場';
       else if (p.exitOnTarget && priorClose != null && priorClose >= a.target) reason = '達目標價出場';
       else if (daysHeld >= p.maxHoldDays) reason = '超過最長持有天數';
+      else if (daysHeld > 0 && daysHeld % QUALITY_RECHECK_INTERVAL_DAYS === 0 && priorClose != null && priorClose > 0 && a.target != null) {
+        const liveUpside = a.target / priorClose - 1;
+        if (liveUpside < p.minUpside) reason = '品質複查出場';
+      }
       if (reason) toExit.push([t, reason]);
     }
     const sellsToday = [];

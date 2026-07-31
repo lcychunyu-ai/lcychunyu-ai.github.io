@@ -581,6 +581,12 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
         # --- 真出場檢查(對active資格池、不是只看今天有沒有權重)：達目標價用「前一天收盤價」
         # 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；調降訊號用
         # 「今天」是否生效判斷；持有天數用交易日數，從active設定的entry_idx算起。---
+        # 2026-07-31新增第四種出場條件「品質複查出場」(跟strategy.html同步)：取消每日強制
+        # 再平衡之後，沒有調降/沒到目標價/沒超過持有天數的股票，即使上漲空間所剩無幾，也會
+        # 一路抱到底，除非剛好當天有更強的新訊號出現觸發頂替——這是機率事件，不是保證。改成
+        # 每QUALITY_RECHECK_INTERVAL_DAYS個交易日主動複查一次「現在還符不符合當初的最低
+        # 上漲空間門檻」，不符合就出場，低頻率、不是每天全面重排。
+        QUALITY_RECHECK_INTERVAL_DAYS = 5
         down_today = down_lookup(day)
         exited = []
         for t, a in active.items():
@@ -593,6 +599,10 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 reason = "達目標價出場"
             elif days_held >= p.max_hold_days:
                 reason = "超過最長持有天數"
+            elif days_held > 0 and days_held % QUALITY_RECHECK_INTERVAL_DAYS == 0 and not np.isnan(prior_close) and prior_close > 0 and a.get("target") is not None:
+                live_upside = a["target"] / prior_close - 1
+                if live_upside < p.min_upside:
+                    reason = "品質複查出場"
             if reason:
                 exited.append((t, reason))
         # 2026-07-31新增：tax_cost累加這一天所有賣出動作課到的證交稅(只算稅、不算手續費，
