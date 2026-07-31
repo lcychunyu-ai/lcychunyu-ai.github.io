@@ -687,10 +687,11 @@ function computeRatingTrendSeries(tpEvents) {
     });
 }
 
-// 橫向發散長條(diverging bar)：保持中立置中對齊中軸(左右對稱)，積極樂觀從軸線往右
-// 展開、保守悲觀從軸線往左展開——三個類別佔比固定加總100%，所以不管怎麼分，紅色
-// 右緣跟綠色左緣一定落在軸線±100%的範圍內，用HTML/CSS的絕對定位百分比就能畫，
-// 不需要SVG，橫向排列由上到下＝由新到舊，一眼掃過去比直向長條更省版面、更不雜亂。
+// 2026-07-31改版：橫向發散長條每一桶都要另外掃過去看數字才知道變化方向，使用者反饋
+// 想要「橫軸是時間、縱軸是分數」的折線圖，才能直接看出這個淨傾向分數(pp)隨時間怎麼
+// 變動——改成SVG折線圖，X軸由左到右＝由舊到新，Y軸是bullPct-bearPct(跟原本橫條右側
+// 顯示的pp數字同一個值)，0為多空分界的基準線，一條線就能看出「現在是在往樂觀走還是
+// 往悲觀走」，比逐桶看數字直覺。
 function renderRatingTrendChart(container, legendEl, series) {
   const hasData = series.some(s => s.total > 0);
   if (!hasData) {
@@ -698,43 +699,75 @@ function renderRatingTrendChart(container, legendEl, series) {
     legendEl.innerHTML = '';
     return;
   }
-  const rows = series.slice().reverse(); // 由新到舊，最新的一桶排在最上面
-  let rowsHtml = '';
-  rows.forEach((s, i) => {
-    const netTilt = s.total ? +(s.bullPct - s.bearPct).toFixed(0) : null;
-    const netCls = netTilt == null ? '' : (netTilt > 0 ? 'up' : (netTilt < 0 ? 'down' : ''));
-    const netLabel = netTilt == null ? '—' : `${netTilt > 0 ? '+' : ''}${netTilt}pp`;
-    let track = '<div class="rtr-axis"></div>';
-    if (s.total > 0) {
-      const neutralHalf = s.neutralPct / 4;   // 中立寬度的一半，換算成軸線兩側各佔的百分比
-      const bullW = s.bullPct / 2;
-      const bearW = s.bearPct / 2;
-      track += `<div class="rtr-seg neutral" style="left:${(50 - neutralHalf).toFixed(2)}%; width:${(neutralHalf * 2).toFixed(2)}%;"></div>`;
-      track += `<div class="rtr-seg bull" style="left:${(50 + neutralHalf).toFixed(2)}%; width:${bullW.toFixed(2)}%;"></div>`;
-      track += `<div class="rtr-seg bear" style="left:${(50 - neutralHalf - bearW).toFixed(2)}%; width:${bearW.toFixed(2)}%;"></div>`;
-    }
-    rowsHtml += `
-      <div class="rtr-row" data-i="${i}">
-        <span class="rtr-label">${s.date}</span>
-        <div class="rtr-track">${track}</div>
-        <span class="rtr-net mono ${netCls}">${netLabel}</span>
-      </div>`;
+  const pts = series.map(s => ({ ...s, netTilt: s.total ? s.bullPct - s.bearPct : null }));
+  const valid = pts.filter(p => p.netTilt != null);
+  const W = 900, H = 200, padL = 44, padR = 14, padT = 16, padB = 26;
+  const vals = valid.map(p => p.netTilt).concat([0]);
+  let vMin = Math.min(...vals), vMax = Math.max(...vals);
+  if (vMin === vMax) { vMin -= 5; vMax += 5; }
+  const vPad = (vMax - vMin) * 0.18;
+  vMin -= vPad; vMax += vPad;
+  const n = pts.length;
+  const x = i => padL + (n === 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
+  const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const upColor = cssVar('--up'), downColor = cssVar('--down');
+
+  let gridLines = '';
+  [vMin + (vMax-vMin)*0.15, 0, vMax - (vMax-vMin)*0.15].forEach(gv => {
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
   });
-  container.innerHTML = `<div class="rtr-rows">${rowsHtml}</div>`;
+  const zeroY = y(0);
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1.2" stroke-dasharray="3,3"/>`;
+  gridLines += `<text x="${padL-8}" y="${(zeroY+3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">0pp</text>`;
+
+  // 缺值(那個桶完全沒有評等資料)直接斷線，不補0，避免誤讀成「剛好轉為中性」
+  let segs = [], cur = [];
+  pts.forEach((p, i) => {
+    if (p.netTilt == null) { if (cur.length) { segs.push(cur); cur = []; } return; }
+    cur.push(`${cur.length === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.netTilt).toFixed(1)}`);
+  });
+  if (cur.length) segs.push(cur);
+  const pathD = segs.map(seg => seg.join(' ')).join(' ');
+
+  let dots = '';
+  pts.forEach((p, i) => {
+    if (p.netTilt == null) return;
+    const color = p.netTilt >= 0 ? upColor : downColor;
+    dots += `<circle class="pt" data-i="${i}" cx="${x(i).toFixed(1)}" cy="${y(p.netTilt).toFixed(1)}" r="4" fill="${color}" stroke="${cssVar('--panel')}" stroke-width="1.5"/>`;
+  });
+
+  const labelStep = Math.max(1, Math.ceil(n / 8));
+  let xLabels = '';
+  pts.forEach((p, i) => {
+    if (i % labelStep !== 0 && i !== n - 1) return;
+    xLabels += `<text x="${x(i).toFixed(1)}" y="${H-8}" font-size="9.5" fill="${inkFaint}" text-anchor="middle">${p.date}</text>`;
+  });
+
+  const svgId = 'ratetrend' + Math.random().toString(36).slice(2, 9);
+  container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${gridLines}
+    <path d="${pathD}" fill="none" stroke="${inkFaint}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.55"/>
+    ${dots}
+    ${xLabels}
+  </svg>`;
   legendEl.innerHTML = `
-    <span><span class="dot bear-dot"></span>保守悲觀 ← 中軸 → <span class="dot bull-dot"></span>積極樂觀</span>
-    <span><span class="dot neutral-dot"></span>保持中立（置中）</span>
-    <span style="color:var(--ink-faint);">右側「pp」＝樂觀−悲觀佔比差，正值代表整體偏多頭</span>
+    <span><span class="dot bull-dot"></span>紅點＝偏多頭（樂觀多於悲觀）</span>
+    <span><span class="dot bear-dot"></span>綠點＝偏空頭（悲觀多於樂觀）</span>
+    <span style="color:var(--ink-faint);">縱軸pp＝樂觀−悲觀佔比差；虛線＝0基準；斷線代表該區間無評等資料</span>
   `;
 
-  container.querySelectorAll('.rtr-row').forEach(row => {
-    row.addEventListener('mousemove', (evt) => {
-      const i = Number(row.dataset.i);
-      const s = rows[i];
-      if (!s.total) { showTip(evt, `<b>${s.date}</b><br/>此區間無評等資料`); return; }
-      showTip(evt, `<b>${s.date}</b><br/>積極樂觀 ${s.bull}（${s.bullPct.toFixed(0)}%）<br/>保持中立 ${s.neutral}（${s.neutralPct.toFixed(0)}%）<br/>保守悲觀 ${s.bear}（${s.bearPct.toFixed(0)}%）<br/>樣本：${s.total}人次`);
+  const svg = document.getElementById(svgId);
+  svg.querySelectorAll('.pt').forEach(dot => {
+    dot.style.cursor = 'pointer';
+    dot.addEventListener('mousemove', (evt) => {
+      const i = Number(dot.dataset.i);
+      const s = pts[i];
+      showTip(evt, `<b>${s.date}</b><br/>淨傾向：<b>${s.netTilt > 0 ? '+' : ''}${s.netTilt.toFixed(0)}pp</b><br/>積極樂觀 ${s.bull}（${s.bullPct.toFixed(0)}%）<br/>保持中立 ${s.neutral}（${s.neutralPct.toFixed(0)}%）<br/>保守悲觀 ${s.bear}（${s.bearPct.toFixed(0)}%）<br/>樣本：${s.total}人次`);
     });
-    row.addEventListener('mouseleave', hideTip);
+    dot.addEventListener('mouseleave', hideTip);
   });
 }
 
