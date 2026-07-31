@@ -490,7 +490,11 @@
             <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
             <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
           </div>
-          <div class="param-field" style="margin-bottom:0;"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="10" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+          <div class="param-field"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="10" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+          <div class="param-row2">
+            <div class="param-field"><label>分批停利門檻（進場到目標價的%）</label><div class="input-suffix"><input type="number" id="p-partialTakeThreshold" value="70" step="10" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field" style="margin-bottom:0;"><label>分批停利比例</label><div class="input-suffix"><input type="number" id="p-partialTakeFraction" value="30" step="10" min="0" max="100"/><span class="suffix">%，0=不啟用</span></div></div>
+          </div>
 
           <div class="param-field" style="margin-bottom:0;">
             <label>配置方式</label>
@@ -1330,6 +1334,32 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       driftedAtOpen.set(t, drifted);
     }
 
+    // 2026-08-01新增(實驗性)：分批停利
+    let taxCost = 0;
+    if (p.partialTakeFraction > 0) {
+      for (const [t, a] of active) {
+        if (a.partialTaken || a.target == null || a.entryPriceToday == null) continue;
+        const priceArr = PRICES[t];
+        const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
+        if (priorClose == null) continue;
+        const partialLevel = a.entryPriceToday + (p.partialTakeThresholdPct / 100) * (a.target - a.entryPriceToday);
+        if (priorClose >= partialLevel && priorClose < a.target) {
+          const oldW = driftedAtOpen.get(t) || 0;
+          const trimAmount = oldW * p.partialTakeFraction;
+          if (trimAmount > 1e-9) {
+            const openArr = PRICES_OPEN[t];
+            const execPrice = openArr ? openArr[i] : null;
+            const newW = oldW - trimAmount;
+            driftedAtOpen.set(t, newW);
+            weightNow.set(t, newW);
+            taxCost += trimAmount * TRANSACTION_TAX_RATE;
+            orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: newW, weightChange: -trimAmount, price: execPrice, reason: '分批停利' });
+          }
+          a.partialTaken = true;
+        }
+      }
+    }
+
     // --- 真出場檢查(對active資格池，不是只看今天有沒有權重)：達目標價用「前一天收盤價」
     // 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；持有天數用
     // 交易日數，從active設定的entryIdx算起。---
@@ -1351,10 +1381,6 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (reason) toExit.push([t, reason]);
     }
     const sellsToday = [];
-    // 2026-08-01新增：taxCost累加這一天所有賣出動作(含正式出場+每日再平衡的減碼)課到的
-    // 證交稅，最後從dailyRet扣掉——強制再平衡下，權重的任何減少都是真實賣出動作，不是
-    // 只有「正式出場」才算，兩處都要課稅才是完整的成本。
-    let taxCost = 0;
     for (const [t, reason] of toExit) {
       active.delete(t);
       const openArr = PRICES_OPEN[t];
@@ -1418,9 +1444,10 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
     // 判斷買賣，跟是否為「新訊號」脫鉤——不管有沒有新聞觸發，只要權重從0變正/從正變0，
     // 當天就是真實的進出場，trades[]/sellsToday都要在那一天記錄。---
     if (active.size > 0) {
-      const combined = [...active.entries()].map(([t, a]) => ({ ticker: t, score: a.score }));
+      const combined = [...active.entries()].filter(([t, a]) => !a.partialTaken).map(([t, a]) => ({ ticker: t, score: a.score }));
       const newWeights = allocateWeights(combined, p);
       for (const [t, a] of active) {
+        if (a.partialTaken) continue;
         const w = newWeights.get(t) || 0;
         const oldW = driftedAtOpen.get(t) || 0;
         const isFreshSignal = newRowsByTicker.has(t);
@@ -1578,6 +1605,8 @@ function readParams() {
     minUpside: Number(document.getElementById('p-minUpside').value) / 100,
     maxHoldDays: Number(document.getElementById('p-maxHold').value),
     stopLossPct: Number(document.getElementById('p-stopLoss').value),
+    partialTakeThresholdPct: Number(document.getElementById('p-partialTakeThreshold').value),
+    partialTakeFraction: Number(document.getElementById('p-partialTakeFraction').value) / 100,
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,
     sizingMode: document.getElementById('p-sizing').value,
