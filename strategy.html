@@ -594,6 +594,14 @@
             <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
             <div id="excess-curve-holder"></div>
           </div>
+
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Rolling Walk-Forward Win Rate</span></div>
+            <div class="block-title" style="margin-left:0;">樣本外滾動勝率（12個月訓練 → 3個月驗證，逐段滾動）</div>
+            <p class="hint" style="margin:2px 0 10px;">跟上面兩張圖不同——上面是「同一組參數套用全期間」的單一結果，這裡是把全期間切成好幾段獨立的樣本外驗證（每段都只用前12個月資料訓練、驗證接下來3個月沒看過的資料），比較不容易被單一區間的運氣影響，是目前對「這組參數到底穩不穩」最誠實的檢驗。</p>
+            <div id="rolling-summary-holder"></div>
+            <div id="rolling-chart-holder"></div>
+          </div>
         </div>
 
         <!-- ===== PARAMETER STABILITY ===== -->
@@ -1765,6 +1773,118 @@ function renderExcessCurve(rows) {
   hit.addEventListener('mouseleave', hideTip);
 }
 
+// ============================================================================
+// 樣本外滾動勝率(2026-08-01新增)
+// ============================================================================
+// 跟上面兩張圖(單一參數套用全期間)不同，這裡是把全期間切成好幾段獨立的樣本外
+// 驗證：每段只用前12個月資料訓練(buildFoldEvUp的140天緩衝邏輯一併沿用，
+// 對照優化器現有的做法)、驗證接下來3個月「完全沒看過」的資料，一路滾動切過
+// 整個回測窗口——這是這次跟使用者一起摸索出來、目前公認最誠實的驗證方法，
+// 不容易被單一區間的運氣影響。跟頁面上其他圖表一樣是reactive的，參數改變會
+// 自動重算(見scheduleAutoRun)。
+function addMonths(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+function computeRollingWindows(params) {
+  const dataStart = '2023-01-01';
+  const dataEnd = DATES[DATES.length - 1];
+  const trainMonths = 12, testMonths = 3;
+  const windows = [];
+  let testStart = addMonths(dataStart, trainMonths);
+  while (testStart < dataEnd) {
+    const trainStart = addMonths(testStart, -trainMonths);
+    let testEnd = addMonths(testStart, testMonths);
+    if (testEnd > dataEnd) testEnd = dataEnd;
+    windows.push({ trainStart, testStart, testEnd });
+    testStart = addMonths(testStart, testMonths);
+  }
+  const results = [];
+  for (const w of windows) {
+    const evUp = buildFoldEvUp(w.trainStart);
+    const { summary } = runBacktest(params, w.testStart, w.testEnd, evUp);
+    results.push({ ...w, excess: summary ? summary.excessReturnPct : null });
+  }
+  return results;
+}
+
+function renderRollingChart(summaryContainer, chartContainer, windows) {
+  const valid = windows.filter(w => w.excess != null);
+  if (!valid.length) {
+    summaryContainer.innerHTML = '';
+    chartContainer.innerHTML = `<div class="chart-empty">資料不足，無法產生樣本外滾動驗證(至少需要12個月訓練期+3個月驗證期)</div>`;
+    return;
+  }
+  const nBeat = valid.filter(w => w.excess > 0).length;
+  const winRate = nBeat / valid.length * 100;
+  const avgExcess = valid.reduce((s, w) => s + w.excess, 0) / valid.length;
+  const isGood = winRate >= 50;
+
+  summaryContainer.innerHTML = `
+    <div class="hero-block" style="margin-bottom:14px;">
+      <div class="hero-top">
+        <div>
+          <div class="hero-label">樣本外滾動勝率（${valid.length}段獨立驗證中，打敗大盤的比例）</div>
+          <div class="hero-value ${isGood ? 'up' : 'down'}">${winRate.toFixed(1)}%</div>
+          <div class="hero-sub">${nBeat} / ${valid.length} 段打贏大盤 · 平均每段超額報酬 ${fmtPct(avgExcess)}</div>
+        </div>
+        <span class="hero-badge ${isGood ? 'up' : 'down'}">${isGood ? '過半數樣本外驗證打敗大盤' : '不到一半樣本外驗證打敗大盤'}</span>
+      </div>
+    </div>`;
+
+  const W = 900, H = 200, padL = 46, padR = 16, padT = 16, padB = 36;
+  const vals = valid.map(w => w.excess).concat([0]);
+  let vMin = Math.min(...vals), vMax = Math.max(...vals);
+  if (vMin === vMax) { vMin -= 5; vMax += 5; }
+  const vPad = (vMax - vMin) * 0.15;
+  vMin -= vPad; vMax += vPad;
+  const n = valid.length;
+  const bandW = (W - padL - padR) / n;
+  const barW = Math.max(6, bandW * 0.6);
+  const yScale = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+  const zeroY = yScale(0);
+
+  const cssVar2 = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar2('--grid'), inkFaint = cssVar2('--ink-faint');
+  const upColor = cssVar2('--up'), downColor = cssVar2('--down');
+
+  let gridLines = '';
+  for (let i = 0; i <= 3; i++) {
+    const gv = vMin + (vMax - vMin) * (i / 3);
+    const gy = yScale(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL-8}" y="${(gy+3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1.2"/>`;
+
+  let bars = '', xLabels = '';
+  valid.forEach((w, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    const barY = yScale(w.excess);
+    const barH = Math.abs(barY - zeroY);
+    const top = w.excess >= 0 ? barY : zeroY;
+    const color = w.excess >= 0 ? upColor : downColor;
+    bars += `<rect class="rw-bar" data-i="${i}" x="${(cx-barW/2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(barH,1).toFixed(1)}" fill="${color}" rx="2"/>`;
+    xLabels += `<text x="${cx.toFixed(1)}" y="${H-10}" font-size="9" fill="${inkFaint}" text-anchor="middle">${w.testStart.slice(2)}</text>`;
+  });
+
+  const svgId = 'rw' + Math.random().toString(36).slice(2, 9);
+  chartContainer.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${gridLines}${bars}${xLabels}
+  </svg>`;
+  const svg = document.getElementById(svgId);
+  svg.querySelectorAll('.rw-bar').forEach(bar => {
+    bar.style.cursor = 'pointer';
+    bar.addEventListener('mousemove', (evt) => {
+      const i = Number(bar.dataset.i);
+      const w = valid[i];
+      showTip(evt, `<b>${w.testStart} ~ ${w.testEnd}</b><br/>訓練期：${w.trainStart} ~ ${w.testStart}<br/>樣本外超額報酬：<b>${fmtPct(w.excess)}</b>`);
+    });
+    bar.addEventListener('mouseleave', hideTip);
+  });
+}
+
 const tooltipEl = document.getElementById('tooltip');
 function showTip(evt, html) {
   tooltipEl.innerHTML = html;
@@ -2052,6 +2172,8 @@ function runAndRenderManual(bestExcessInfo) {
   renderCurve(rows);
   renderExcessCurve(rows);
   renderLedger(rows);
+  const rollingWindows = computeRollingWindows(p);
+  renderRollingChart(document.getElementById('rolling-summary-holder'), document.getElementById('rolling-chart-holder'), rollingWindows);
   return { rows, summary };
 }
 
