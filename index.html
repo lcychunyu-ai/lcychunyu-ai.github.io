@@ -701,27 +701,35 @@ function renderRatingTrendChart(container, legendEl, series) {
   }
   const pts = series.map(s => ({ ...s, netTilt: s.total ? s.bullPct - s.bearPct : null }));
   const valid = pts.filter(p => p.netTilt != null);
-  const W = 900, H = 200, padL = 44, padR = 14, padT = 16, padB = 26;
+  const W = 900, H = 220, padL = 54, padR = 20, padT = 18, padB = 34;
   const vals = valid.map(p => p.netTilt).concat([0]);
   let vMin = Math.min(...vals), vMax = Math.max(...vals);
   if (vMin === vMax) { vMin -= 5; vMax += 5; }
-  const vPad = (vMax - vMin) * 0.18;
+  const vPad = (vMax - vMin) * 0.22;
   vMin -= vPad; vMax += vPad;
   const n = pts.length;
   const x = i => padL + (n === 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
   const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
 
-  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint'), ink = cssVar('--ink');
   const upColor = cssVar('--up'), downColor = cssVar('--down');
 
+  // 2026-08-01修正：原本只有0pp基準線有標數字，其他格線都是空白，看起來像沒做完。
+  // 改成Y軸4條刻度線全部標數字(含單位pp)，X軸每個標籤底下也配一條淡色垂直格線，
+  // 湊成真正的座標網格，不是只有一條孤伶伶的虛線。
   let gridLines = '';
-  [vMin + (vMax-vMin)*0.15, 0, vMax - (vMax-vMin)*0.15].forEach(gv => {
+  const yTicks = 4;
+  for (let k = 0; k <= yTicks; k++) {
+    const gv = vMin + (vMax - vMin) * (k / yTicks);
     const gy = y(gv);
     gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
-  });
+    gridLines += `<text x="${padL-10}" y="${(gy+3.5).toFixed(1)}" font-size="10" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv > 0 ? '+' : ''}${gv.toFixed(0)}pp</text>`;
+  }
   const zeroY = y(0);
-  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1.2" stroke-dasharray="3,3"/>`;
-  gridLines += `<text x="${padL-8}" y="${(zeroY+3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">0pp</text>`;
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${ink}" stroke-width="1.3" stroke-dasharray="4,3" opacity="0.6"/>`;
+  // 座標軸本體(左邊Y軸、下面X軸)，讓圖表看起來是個完整的座標系，不是漂浮的線
+  gridLines += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="${inkFaint}" stroke-width="1"/>`;
+  gridLines += `<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="${inkFaint}" stroke-width="1"/>`;
 
   // 缺值(那個桶完全沒有評等資料)直接斷線，不補0，避免誤讀成「剛好轉為中性」
   let segs = [], cur = [];
@@ -732,26 +740,34 @@ function renderRatingTrendChart(container, legendEl, series) {
   if (cur.length) segs.push(cur);
   const pathD = segs.map(seg => seg.join(' ')).join(' ');
 
-  let dots = '';
+  let dots = '', valueLabels = '';
   pts.forEach((p, i) => {
     if (p.netTilt == null) return;
     const color = p.netTilt >= 0 ? upColor : downColor;
-    dots += `<circle class="pt" data-i="${i}" cx="${x(i).toFixed(1)}" cy="${y(p.netTilt).toFixed(1)}" r="4" fill="${color}" stroke="${cssVar('--panel')}" stroke-width="1.5"/>`;
+    const cy = y(p.netTilt);
+    dots += `<circle class="pt" data-i="${i}" cx="${x(i).toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${color}" stroke="${cssVar('--panel')}" stroke-width="1.5"/>`;
+    // 每個點正上方或正下方直接標出精確的pp數字，正值往上標、負值往下標，避免壓到線
+    const labelY = p.netTilt >= 0 ? cy - 10 : cy + 16;
+    valueLabels += `<text x="${x(i).toFixed(1)}" y="${labelY.toFixed(1)}" font-size="10" font-weight="700" fill="${color}" text-anchor="middle" font-family="ui-monospace,monospace">${p.netTilt > 0 ? '+' : ''}${p.netTilt.toFixed(0)}pp</text>`;
   });
 
   const labelStep = Math.max(1, Math.ceil(n / 8));
-  let xLabels = '';
+  let xLabels = '', xGrid = '';
   pts.forEach((p, i) => {
     if (i % labelStep !== 0 && i !== n - 1) return;
-    xLabels += `<text x="${x(i).toFixed(1)}" y="${H-8}" font-size="9.5" fill="${inkFaint}" text-anchor="middle">${p.date}</text>`;
+    xLabels += `<text x="${x(i).toFixed(1)}" y="${H-12}" font-size="10" fill="${inkFaint}" text-anchor="middle">${p.date}</text>`;
+    xGrid += `<line x1="${x(i).toFixed(1)}" y1="${padT}" x2="${x(i).toFixed(1)}" y2="${H-padB}" stroke="${gridColor}" stroke-width="1" stroke-dasharray="2,3"/>`;
   });
 
   const svgId = 'ratetrend' + Math.random().toString(36).slice(2, 9);
   container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${xGrid}
     ${gridLines}
     <path d="${pathD}" fill="none" stroke="${inkFaint}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.55"/>
     ${dots}
+    ${valueLabels}
     ${xLabels}
+    <text x="${padL}" y="12" font-size="9.5" fill="${inkFaint}" text-anchor="start">縱軸：淨傾向分數（pp）</text>
   </svg>`;
   legendEl.innerHTML = `
     <span><span class="dot bull-dot"></span>紅點＝偏多頭（樂觀多於悲觀）</span>
