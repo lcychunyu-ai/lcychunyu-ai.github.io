@@ -2509,9 +2509,14 @@ async function runStrictSearchAndRender() {
   applyParamsToForm(selected.params);
   setDateField('start', '2023-01-01');
   setDateField('end', testEnd);
-  runAndRenderManual(LAST_BEST_EXCESS);
+  // 2026-08-01修正(重新套用先前發現過的bug修正——git checkout 144fede時被一併revert掉)：
+  // 這裡呼叫runAndRenderManual()之前沒有接住回傳值更新LAST_RUN_SUMMARY，導致這個全域
+  // 變數停在套用新參數「之前」的舊結果；下面原本的renderCards(LAST_RUN_SUMMARY, ...)
+  // 又用這個過期的全域變數重繪一次卡片，把剛畫好的正確結果蓋回舊的。改成接住回傳值，
+  // 移除這行多餘且會蓋掉正確結果的重複renderCards()呼叫。
+  const { summary: freshSummary } = runAndRenderManual(LAST_BEST_EXCESS);
+  LAST_RUN_SUMMARY = freshSummary;
 
-  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS, CURRENT_ROWS);
   return { selected, testEnd, isOverfit };
 }
 
