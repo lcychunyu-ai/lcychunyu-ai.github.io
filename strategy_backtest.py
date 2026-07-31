@@ -41,7 +41,7 @@ get_strategy_price_bundle() RPC一次拉回)，不再讀本機的factset_data/pr
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, Optional
 
 import numpy as np
@@ -371,9 +371,9 @@ class StrategyParams:
     min_analyst_count: int = 3              # 最低分析師數
     min_upside: float = 0.0                 # 最低上漲空間門檻(小數，例如0.05=5%)
 
-    max_hold_days: int = 60
+    max_hold_days: int = 30
     max_weight_per_stock: float = 0.2
-    max_positions: int = 10                 # 0=不限
+    max_positions: int = 15                 # 0=不限；2026-07-31主管裁示至少15-20檔才有基金規模
     max_portfolio_exposure: float = 1.0      # 使用者新增：投組總曝險上限，1.0=可滿倉
 
     sizing_mode: Literal["equal", "by_upgrade", "composite", "enhanced"] = "equal"
@@ -383,6 +383,14 @@ class StrategyParams:
 
     avg_rule: Literal["none", "tier3"] = "none"
     avg_boost_mult: float = 1.5             # tier3高於平均時的加碼倍數
+
+    replace_threshold_pct: float = 15.0     # 2026-07-31新增：換股門檻(pp)，檔數滿時新標的
+                                             # 上漲空間要贏過最弱持股多少pp才觸發頂替
+
+
+TRANSACTION_TAX_RATE = 0.003  # 證交稅0.3%，只對賣方課徵；範圍依2026-07-31使用者裁示，
+                               # 只算證交稅、不算手續費(手續費依券商折讓差異大，證交稅是
+                               # 法定稅率沒有模糊空間)
 
 
 # ----------------------------------------------------------------------------
@@ -587,6 +595,9 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 reason = "超過最長持有天數"
             if reason:
                 exited.append((t, reason))
+        # 2026-07-31新增：tax_cost累加這一天所有賣出動作課到的證交稅(只算稅、不算手續費，
+        # 範圍依使用者裁示)，最後從daily_ret扣掉。
+        tax_cost = 0.0
         for t, reason in exited:
             active.pop(t)
             exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
@@ -602,6 +613,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             if old_w > 1e-9:
                 orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": old_w,
                                 "weight_after": 0.0, "weight_change": -old_w, "price": exit_price, "reason": reason})
+                tax_cost += old_w * TRANSACTION_TAX_RATE
 
         # --- 新訊號：合格的更新/加入active資格池，重設entry_idx跟目標價，不管這檔股票今天
         # 在不在active裡都要覆蓋——新訊號代表重新起算持有天數，不能拿舊訊號殘留的資訊繼續
@@ -634,50 +646,95 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                         continue
                     if t in active:
                         update_only_by_ticker[t] = row
+        # 2026-07-31重寫(跟strategy.html同步)：主管跟使用者裁示取消強制每日再平衡，避免
+        # 頻繁調整權重製造不必要的證交稅/摩擦成本——已經持有的股票，新訊號只更新target/
+        # entry_idx(重啟持有天數計算)，權重完全不碰，繼續讓它自然漂移。只有「今天不在
+        # active裡」的全新合格訊號，才是真正要決定「進不進場」的候選，拆成fresh_entrants
+        # 獨立處理，不再對整個active池重新配置權重。
+        fresh_entrants = []
         for t, (row, s) in new_rows_by_ticker.items():
-            active[t] = {"entry_idx": day_idx, "target": row["new_target"], "score": s, "entry_price_today": row["entry_price_used"]}
+            if t in active:
+                a = active[t]
+                a["entry_idx"] = day_idx; a["target"] = row["new_target"]; a["score"] = s
+                a["entry_price_today"] = row["entry_price_used"]
+            else:
+                fresh_entrants.append({
+                    "ticker": t, "score": s, "target": row["new_target"],
+                    "entry_price_today": row["entry_price_used"], "upside": row["upside_used"],
+                })
         for t, row in update_only_by_ticker.items():
             active[t]["target"] = row["new_target"]
+        fresh_entrants.sort(key=lambda fe: -fe["score"])  # 同一天多檔候選、名額不夠時分數高者優先
 
-        # --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
-        # 固定資本每日平帳：總曝險才會真的每天都保證不超過max_portfolio_exposure。今天沒被
-        # 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
-        # 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。
-        # 2026-07-30修正(跟strategy.html同步)：權重被壓到0(RANKED_OUT)那天其實已經是真的
-        # 賣出(當天dailyReturn就結算了)，不該延後到「正式從active移除」那天才記進trades/
-        # win_rate用的出場價，那樣entry_price/exit_price對不上真正變現的那一天。改成用權重
-        # 是否穿越0這個真實事件來配對trades，跟是否為新訊號脫鉤。---
-        if active:
-            combined_scores = pd.Series({t: a["score"] for t, a in active.items()})
-            new_weights = allocate_weights(combined_scores, p)
-            for t, a in active.items():
-                w = float(new_weights.get(t, 0.0))
-                old_w = drifted_at_open.get(t, 0.0)
-                is_fresh_signal = t in new_rows_by_ticker
-                is_buy_crossing = w > 1e-9 and old_w <= 1e-9
-                is_sell_crossing = w <= 1e-9 and old_w > 1e-9
-                price_now = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
-                if is_buy_crossing:
-                    entry_price = a.get("entry_price_today") if is_fresh_signal else price_now
-                    trade_entry[t] = {"entry_date": day, "entry_price": entry_price}
-                if is_sell_crossing and t in trade_entry:
-                    te = trade_entry.pop(t)
-                    reason = "調降出場" if t in down_today else "排名擠出"
-                    trades.append({
-                        "ticker": t, "entry_date": te["entry_date"], "exit_date": day,
-                        "entry_price": te["entry_price"], "exit_price": price_now,
-                        "reason": reason,
-                    })
-                delta = w - old_w
-                if abs(delta) > 1e-9:
-                    reason = "QUALIFIED_UPGRADE" if (is_buy_crossing and is_fresh_signal) else ("RANK_RECOVERED" if is_buy_crossing else ("RANKED_OUT" if is_sell_crossing else "SIGNAL_REBALANCE"))
-                    orders.append({"date": day, "ticker": t, "side": "BUY" if delta > 0 else "SELL",
-                                    "weight_before": old_w, "weight_after": w, "weight_change": delta,
-                                    "price": price_now, "reason": reason})
-                if w > 1e-9:
+        if fresh_entrants:
+            used_exposure = sum(drifted_at_open.get(t, 0.0) for t in weight_now)
+            unlimited = not (p.max_positions > 0)
+            available_slots = len(fresh_entrants) if unlimited else max(0, p.max_positions - len(weight_now))
+            target_weight_per_slot = p.max_weight_per_stock if unlimited else min(p.max_weight_per_stock, p.max_portfolio_exposure / max(1, p.max_positions))
+            available_budget = max(0.0, p.max_portfolio_exposure - used_exposure)
+            entrants_for_slots = fresh_entrants[:available_slots]
+            overflow_entrants = fresh_entrants[available_slots:]
+
+            # 有空位的候選：用選定的配置方式在「這批新候選+這次可用預算」範圍內分配權重，
+            # 複用allocate_weights()的water-filling邏輯，但完全不動任何既有持股。
+            if entrants_for_slots:
+                slot_budget = min(len(entrants_for_slots) * target_weight_per_slot, available_budget)
+                slot_params = replace(p, max_portfolio_exposure=slot_budget, max_weight_per_stock=target_weight_per_slot, max_positions=0)
+                combined_scores = pd.Series({fe["ticker"]: fe["score"] for fe in entrants_for_slots})
+                new_w = allocate_weights(combined_scores, slot_params)
+                for fe in entrants_for_slots:
+                    w = float(new_w.get(fe["ticker"], 0.0))
+                    if w <= 1e-9:
+                        continue
+                    t = fe["ticker"]
+                    active[t] = {"entry_idx": day_idx, "target": fe["target"], "score": fe["score"], "entry_price_today": fe["entry_price_today"]}
+                    trade_entry[t] = {"entry_date": day, "entry_price": fe["entry_price_today"]}
+                    orders.append({"date": day, "ticker": t, "side": "BUY", "weight_before": 0.0,
+                                    "weight_after": w, "weight_change": w, "price": fe["entry_price_today"], "reason": "QUALIFIED_UPGRADE"})
                     weight_now[t] = w
-                else:
-                    weight_now.pop(t, None)
+
+            # 沒有空位的候選：檔數已滿，只有「上漲空間顯著贏過目前最弱的持股」才觸發換股——
+            # 用上漲空間%(不是內部score)比較，最弱持股的上漲空間即時用「前一天收盤價+目前
+            # 掛的目標價」重算，不是進場當天的舊快照。replace_threshold_pct(pp)門檻避免
+            # 為了分數差一點點就頻繁換股，把省下來的證交稅又吃回去。
+            for fe in overflow_entrants:
+                weakest_ticker, weakest_upside = None, float("inf")
+                for t in weight_now:
+                    a = active.get(t)
+                    if a is None or a.get("target") is None:
+                        continue
+                    prior_close = stock_price.get(t, pd.Series(dtype=float)).get(prev_day, np.nan) if prev_day is not None else np.nan
+                    if np.isnan(prior_close) or prior_close <= 0:
+                        continue
+                    live_upside = a["target"] / prior_close - 1
+                    if live_upside < weakest_upside:
+                        weakest_upside, weakest_ticker = live_upside, t
+                if weakest_ticker is None:
+                    continue
+                if (fe["upside"] - weakest_upside) * 100 <= p.replace_threshold_pct:
+                    continue  # 沒有顯著贏過，維持現狀不換股
+
+                old_w = drifted_at_open.get(weakest_ticker, weight_now.get(weakest_ticker, 0.0))
+                exit_price_w = stock_price_open.get(weakest_ticker, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
+                active.pop(weakest_ticker, None)
+                weight_now.pop(weakest_ticker, None)
+                tax_cost += old_w * TRANSACTION_TAX_RATE
+                if weakest_ticker in trade_entry:
+                    te = trade_entry.pop(weakest_ticker)
+                    trades.append({
+                        "ticker": weakest_ticker, "entry_date": te["entry_date"], "exit_date": day,
+                        "entry_price": te["entry_price"], "exit_price": exit_price_w, "reason": "新標的頂替",
+                    })
+                orders.append({"date": day, "ticker": weakest_ticker, "side": "SELL", "weight_before": old_w,
+                                "weight_after": 0.0, "weight_change": -old_w, "price": exit_price_w, "reason": "新標的頂替"})
+
+                t = fe["ticker"]
+                w = min(old_w, target_weight_per_slot, p.max_weight_per_stock)
+                active[t] = {"entry_idx": day_idx, "target": fe["target"], "score": fe["score"], "entry_price_today": fe["entry_price_today"]}
+                trade_entry[t] = {"entry_date": day, "entry_price": fe["entry_price_today"]}
+                orders.append({"date": day, "ticker": t, "side": "BUY", "weight_before": 0.0,
+                                "weight_after": w, "weight_change": w, "price": fe["entry_price_today"], "reason": "新標的頂替"})
+                weight_now[t] = w
 
         # --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。今天出場
         # 或被擠出的部位權重已經是0，不會有盤中段貢獻(對照同事版本的既有簡化)。---
@@ -688,7 +745,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
                 intraday_ret += w * (close_now / open_now - 1)
 
-        daily_ret = overnight_ret + intraday_ret
+        daily_ret = overnight_ret + intraday_ret - tax_cost
 
         # 2026-07-28修正：taiex_ret是對「全部歷史」(calendar，2021年至今)一次算好的
         # pct_change()全域序列，不是針對這次回測視窗算的。如果視窗起始日不是calendar裡
@@ -718,6 +775,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             "exposure": sum(drifted_at_close.values()),
             "daily_return": daily_ret,
             "taiex_return": taiex_ret_today,
+            "tax_cost": tax_cost,
         })
 
         # --- 收盤後把weight_now換成剛剛算好的drifted_at_close，作為明天隔夜段的起始

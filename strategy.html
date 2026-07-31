@@ -484,8 +484,11 @@
             <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
           </div>
           <div class="param-row2">
-            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
-            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
+            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="30" step="5" min="0"/><span class="suffix">交易日</span></div></div>
+            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="15" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
+          </div>
+          <div class="param-row2">
+            <div class="param-field"><label>換股門檻（新標的需贏過最弱持股多少上漲空間才換股）</label><div class="input-suffix"><input type="number" id="p-replaceThreshold" value="15" step="1" min="0"/><span class="suffix">pp</span></div></div>
           </div>
 
           <div class="param-field" style="margin-bottom:0;">
@@ -529,7 +532,18 @@
                 <p class="model-example">五個因子（異常調升、分析師數、上漲空間、相對動能、連續上修）相乘，再除以波動率；任一項越有利，分數越高。</p>
                 <p class="formula-ref">公式參考：S = 異常調升 × ln(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</p>
               </div>
-              <p style="margin-top:10px; font-size:11px; color:var(--ink-faint);">四種模型分數轉權重的流程相同：篩選合格股票→依分數排序→(若設最大持股數)取前K檔→依分數比例分配初始權重→套用單檔上限，超過上限的固定在上限、剩餘資金依其他股票分數重新分配→股票太少湊不滿曝險上限時，剩餘保留現金。</p>
+              <p style="margin-top:10px; font-size:11px; color:var(--ink-faint);">2026-07-31修改：已經持有的股票權重不會再被每天重新分配——只有「今天新出現、目前沒持有」的候選才會用選定的配置方式分數排序、分配當天可用的名額/資金；名額已滿時改看「換股門檻」決定要不要頂替既有部位（見下方說明）。四種模型只差在怎麼幫新候選排優先序，不影響既有持股的權重大小。</p>
+            </div>
+          </details>
+
+          <details class="explainer-toggle">
+            <summary>沒有每日再平衡，那什麼時候會換股？</summary>
+            <div class="explainer" style="margin-top:10px;">
+              <p style="font-size:12.5px; line-height:1.7; color:var(--ink-dim); margin:0 0 8px;">2026-07-31起取消「不管有沒有訊號、每天都強制拉回目標權重」的機制——這個機制帳面乾淨，但會製造大量不必要的證交稅。改成只在三種情況才會有交易：</p>
+              <p style="font-size:12.5px; line-height:1.7; color:var(--ink-dim); margin:0 0 6px;"><b>① 正式出場</b>：達目標價／分析師調降／超過最長持有天數，跟原本一樣。</p>
+              <p style="font-size:12.5px; line-height:1.7; color:var(--ink-dim); margin:0 0 6px;"><b>② 有空位就直接進場</b>：目前持股數還沒到上限，新合格訊號直接分配到一個名額，不影響其他既有持股。</p>
+              <p style="font-size:12.5px; line-height:1.7; color:var(--ink-dim); margin:0 0 6px;"><b>③ 檔數已滿才考慮換股</b>：新標的的上漲空間，要贏過目前最弱那檔持股（即時重算，不是進場當天的舊數字）超過「換股門檻」設定的pp數，才會賣掉最弱的那檔、換成新標的；贏得不夠多就維持現狀，不換。門檻是為了避免為了一點點差距就頻繁換股，把省下來的證交稅又吃回去。</p>
+              <p style="font-size:11px; color:var(--ink-faint); margin:0;">賣出時另外課0.3%證交稅（台股現制，只對賣方課徵），已經算進所有報酬數字裡；買進不課稅，也沒有另外估算手續費。</p>
             </div>
           </details>
 
@@ -644,7 +658,7 @@
             <button class="btn secondary small" id="ledger-csv-btn">匯出每日 CSV</button>
           </div>
           <div class="capital-row">
-            <div class="param-field"><label>實際執行資金（元）</label><input type="number" id="p-capital" value="10000000" step="100000"/></div>
+            <div class="param-field"><label>實際執行資金（元）</label><input type="number" id="p-capital" value="100000000" step="1000000"/></div>
           </div>
           <div id="ledger-detail"></div>
         </section>
@@ -1176,6 +1190,11 @@ function scoreOne(c, p) {
 // 兩邊比的根本不是同一個東西，不是真的bug。既然要改成跟同事一致的模型/命名，這個
 // 自創的配置方式直接移除，不留骨架。
 
+// 2026-07-31新增：證交稅率——賣出成交金額的0.3%(台股現制，只對賣方課徵)。使用者
+// 2026-07-31明確裁示：這次只算證交稅，不算手續費(手續費通常有折讓、券商不同差異大，
+// 證交稅是法定稅率沒有模糊空間)，這是刻意縮小的成本模型範圍，不是遺漏。
+const TRANSACTION_TAX_RATE = 0.003;
+
 // scoresArr: [{ticker,score}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
 function allocateWeights(scoresArr, p) {
   const sumAll = scoresArr.reduce((s, x) => s + x.score, 0);
@@ -1306,6 +1325,9 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (reason) toExit.push([t, reason]);
     }
     const sellsToday = [];
+    // 2026-07-31新增：taxCost累加這一天所有賣出動作課到的證交稅，最後從dailyRet扣掉——
+    // 只在真正賣出(oldW>1e-9)時課稅，出場當下權重已經是0的(前一天已經穿越0賣掉過)不重複課稅。
+    let taxCost = 0;
     for (const [t, reason] of toExit) {
       active.delete(t);
       const openArr = PRICES_OPEN[t];
@@ -1320,6 +1342,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       }
       if (oldW > 1e-9) {
         orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPrice, reason });
+        taxCost += oldW * TRANSACTION_TAX_RATE;
       }
     }
 
@@ -1348,54 +1371,97 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
         });
       }
     }
+
+    // 2026-07-31重寫：主管跟使用者裁示取消強制每日再平衡，避免頻繁調整權重製造不必要
+    // 的證交稅/摩擦成本——已經持有的股票，新訊號只更新target/entryIdx(重啟持有天數
+    // 計算)，權重完全不碰，讓它繼續自然漂移(driftedAtClose結轉到明天，邏輯不變)。只有
+    // 「今天不在active裡」的全新合格訊號，才是真正要決定「進不進場」的候選，拆成
+    // freshEntrants獨立處理，不再對整個active池重新配置權重。
+    const freshEntrants = [];
     for (const [t, v] of newRowsByTicker) {
-      active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed, referenceClose: v.row.referenceClose });
+      if (active.has(t)) {
+        const a = active.get(t);
+        a.entryIdx = i; a.target = v.row.newTarget; a.score = v.score;
+        a.entryPriceToday = v.row.entryPriceUsed; a.referenceClose = v.row.referenceClose;
+      } else {
+        freshEntrants.push({ ticker: t, score: v.score, target: v.row.newTarget, entryPriceToday: v.row.entryPriceUsed, referenceClose: v.row.referenceClose, upside: v.row.upsideUsed });
+      }
     }
     for (const [t, row] of updateOnlyByTicker) {
       active.get(t).target = row.newTarget;
     }
+    freshEntrants.sort((a, b) => b.score - a.score); // 同一天多檔候選、名額不夠時分數高者優先
 
-    // --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
-    // 固定資本每日平帳：總曝險才會真的每天都保證不超過maxPortfolioExposure。今天沒被
-    // 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
-    // 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。
-    // 2026-07-30修正：權重被壓到0(RANKED_OUT)那天，事實上已經是真的賣出(這筆錢已經換
-    // 回現金、當天就結算進dailyReturn了)，不是延後幾天等正式從active移除才算數。原本
-    // trades[]/sellsToday只在「正式出場」(達目標價/調降/超天數)才收單，導致：(1)真正
-    // 賣出的那天使用者在「今日動作」跟買賣明細表完全看不到這筆交易 (2) win_rate/
-    // payoff_ratio用的trades[]拿「正式移除active那天」的價格當出場價，但那天可能早就
-    // 沒部位了，出場價跟真正賣出的價格對不起來。改成用「權重是否穿越0」這個真實事件來
-    // 判斷買賣，跟是否為「新訊號」脫鉤——不管有沒有新聞觸發，只要權重從0變正/從正變0，
-    // 當天就是真實的進出場，trades[]/sellsToday都要在那一天記錄。---
-    if (active.size > 0) {
-      const combined = [...active.entries()].map(([t, a]) => ({ ticker: t, score: a.score }));
-      const newWeights = allocateWeights(combined, p);
-      for (const [t, a] of active) {
-        const w = newWeights.get(t) || 0;
-        const oldW = driftedAtOpen.get(t) || 0;
-        const isFreshSignal = newRowsByTicker.has(t);
-        const openArr = PRICES_OPEN[t];
-        const isBuyCrossing = w > 1e-9 && oldW <= 1e-9;
-        const isSellCrossing = w <= 1e-9 && oldW > 1e-9;
-        if (isBuyCrossing) {
-          const entryPrice = isFreshSignal ? a.entryPriceToday : (openArr ? openArr[i] : null);
-          tradeEntry.set(t, { entryDate: day, entryPrice });
-          buysToday.push({ ticker: t, price: entryPrice, weight: w });
+    if (freshEntrants.length > 0) {
+      let usedExposure = 0;
+      for (const [t] of weightNow) usedExposure += driftedAtOpen.get(t) || 0;
+      const unlimited = !(p.maxPositions > 0);
+      const availableSlots = unlimited ? freshEntrants.length : Math.max(0, p.maxPositions - weightNow.size);
+      const targetWeightPerSlot = unlimited ? p.maxWeightPerStock : Math.min(p.maxWeightPerStock, p.maxPortfolioExposure / Math.max(1, p.maxPositions));
+      const availableBudget = Math.max(0, p.maxPortfolioExposure - usedExposure);
+      const entrantsForSlots = freshEntrants.slice(0, availableSlots);
+      const overflowEntrants = freshEntrants.slice(availableSlots);
+
+      // 有空位的候選：用選定的配置方式(等權/調升幅度加權/綜合分數/多因子)在「這批新
+      // 候選+這次可用預算」的範圍內分配權重，複用allocateWeights()的water-filling邏輯，
+      // 但完全不動任何既有持股——這是跟舊版最大的差異：以前每天重算整個active池的權重，
+      // 現在只計算「今天新進場這一小批」。
+      if (entrantsForSlots.length > 0) {
+        const slotBudget = Math.min(entrantsForSlots.length * targetWeightPerSlot, availableBudget);
+        const newW = allocateWeights(
+          entrantsForSlots.map(fe => ({ ticker: fe.ticker, score: fe.score })),
+          { ...p, maxPortfolioExposure: slotBudget, maxWeightPerStock: targetWeightPerSlot, maxPositions: 0 }
+        );
+        for (const fe of entrantsForSlots) {
+          const w = newW.get(fe.ticker) || 0;
+          if (w <= 1e-9) continue;
+          active.set(fe.ticker, { entryIdx: i, target: fe.target, score: fe.score, entryPriceToday: fe.entryPriceToday, referenceClose: fe.referenceClose });
+          tradeEntry.set(fe.ticker, { entryDate: day, entryPrice: fe.entryPriceToday });
+          buysToday.push({ ticker: fe.ticker, price: fe.entryPriceToday, weight: w });
+          orders.push({ date: day, ticker: fe.ticker, side: 'BUY', weightBefore: 0, weightAfter: w, weightChange: w, price: fe.entryPriceToday, reason: 'QUALIFIED_UPGRADE' });
+          weightNow.set(fe.ticker, w);
         }
-        if (isSellCrossing && tradeEntry.has(t)) {
-          const te = tradeEntry.get(t);
-          tradeEntry.delete(t);
-          const exitPrice = openArr ? openArr[i] : null;
-          const reason = p.exitOnDown && downToday.has(t) ? '調降出場' : '排名擠出';
-          trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
-          sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
+      }
+
+      // 沒有空位的候選：檔數已滿，只有「上漲空間顯著贏過目前最弱的持股」才觸發換股——
+      // 用上漲空間%(不是內部score，這是人看得懂、跟策略經濟邏輯直接掛鉤的數字)比較，
+      // 最弱持股的上漲空間用「前一天收盤價+目前掛的目標價」即時重算，不是進場當天的
+      // 舊快照。replaceThresholdPct(pp)門檻是為了不要為了分數差一點點就頻繁換股，把
+      // 省下來的證交稅又吃回去，數值由敏感度分析工具掃描校準，不是憑感覺定。
+      for (const fe of overflowEntrants) {
+        let weakestTicker = null, weakestUpside = Infinity;
+        for (const [t] of weightNow) {
+          const a = active.get(t);
+          if (!a || a.target == null) continue;
+          const priceArr = PRICES[t];
+          const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
+          if (priorClose == null || priorClose <= 0) continue;
+          const liveUpside = a.target / priorClose - 1;
+          if (liveUpside < weakestUpside) { weakestUpside = liveUpside; weakestTicker = t; }
         }
-        const delta = w - oldW;
-        if (Math.abs(delta) > 1e-9) {
-          const reason = isBuyCrossing ? (isFreshSignal ? 'QUALIFIED_UPGRADE' : 'RANK_RECOVERED') : (isSellCrossing ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
-          orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
+        if (weakestTicker == null) continue;
+        if ((fe.upside - weakestUpside) * 100 <= p.replaceThresholdPct) continue; // 沒有顯著贏過，維持現狀不換股
+
+        const oldW = driftedAtOpen.get(weakestTicker) || weightNow.get(weakestTicker) || 0;
+        const openArrW = PRICES_OPEN[weakestTicker];
+        const exitPriceW = openArrW ? openArrW[i] : null;
+        active.delete(weakestTicker);
+        weightNow.delete(weakestTicker);
+        taxCost += oldW * TRANSACTION_TAX_RATE;
+        if (tradeEntry.has(weakestTicker)) {
+          const te = tradeEntry.get(weakestTicker);
+          tradeEntry.delete(weakestTicker);
+          trades.push({ ticker: weakestTicker, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice: exitPriceW, reason: '新標的頂替' });
+          sellsToday.push({ ticker: weakestTicker, reason: '新標的頂替', entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice: exitPriceW, weight: oldW });
         }
-        if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
+        orders.push({ date: day, ticker: weakestTicker, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPriceW, reason: '新標的頂替' });
+
+        const w = Math.min(oldW, targetWeightPerSlot, p.maxWeightPerStock);
+        active.set(fe.ticker, { entryIdx: i, target: fe.target, score: fe.score, entryPriceToday: fe.entryPriceToday, referenceClose: fe.referenceClose });
+        tradeEntry.set(fe.ticker, { entryDate: day, entryPrice: fe.entryPriceToday });
+        buysToday.push({ ticker: fe.ticker, price: fe.entryPriceToday, weight: w });
+        orders.push({ date: day, ticker: fe.ticker, side: 'BUY', weightBefore: 0, weightAfter: w, weightChange: w, price: fe.entryPriceToday, reason: '新標的頂替' });
+        weightNow.set(fe.ticker, w);
       }
     }
 
@@ -1413,7 +1479,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (r != null) intradayRet += w * r;
       attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, referenceClose: a ? a.referenceClose : null, isEntryDay });
     }
-    const dailyRet = overnightRet + intradayRet;
+    const dailyRet = overnightRet + intradayRet - taxCost;
     // 2026-07-28修正：TAIEX_RET是loadAll()時對「全部歷史」一次算好的全域陣列(2021年至今)，
     // 不是針對「這次回測視窗」算的。如果回測起始日不是資料庫裡最早的那天(例如startDate=
     // 2023-01-01，但DATES其實從2021年就有資料)，TAIEX_RET[startIdx]算的是「視窗外前一天
@@ -1446,7 +1512,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
       attribution, overnightAttribution,
       nPositions: weightNow.size, exposure,
-      dailyReturn: dailyRet, taiexReturn: taiexRet,
+      dailyReturn: dailyRet, taiexReturn: taiexRet, taxCost,
       buys: buysToday, sells: sellsToday,
       sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
     });
@@ -1535,6 +1601,7 @@ function readParams() {
     maxWeightPerStock: Number(document.getElementById('p-maxWeight').value) / 100,
     maxPositions: Number(document.getElementById('p-maxPositions').value),
     maxPortfolioExposure: Number(document.getElementById('p-maxExposure').value) / 100,
+    replaceThresholdPct: Number(document.getElementById('p-replaceThreshold').value),
     avgRule: document.getElementById('p-avgRule').value,
     avgBoostMult: Number(document.getElementById('p-avgBoost').value),
     conceptFilters: [...SELECTED_CONCEPTS],
@@ -2258,6 +2325,7 @@ function applyParamsToForm(p) {
   document.getElementById('p-maxHold').value = p.maxHoldDays;
   document.getElementById('p-maxPositions').value = p.maxPositions;
   document.getElementById('p-maxExposure').value = p.maxPortfolioExposure * 100;
+  document.getElementById('p-replaceThreshold').value = p.replaceThresholdPct;
   document.getElementById('p-sizing').value = p.sizingMode;
   document.getElementById('p-avgRule').value = p.avgRule;
   document.getElementById('p-avgBoost').value = p.avgBoostMult;
@@ -2304,15 +2372,21 @@ function buildOptimizerCandidates(baseParams) {
 // 寫死allocation∈['score','enhanced'])。這是我們自己的延伸搜尋，候選數變成384組
 // (3×2×2×4×2×4)，不再是跟同事192組完全對上的原始版本，所以獨立成另一個區塊，
 // 不動原本已經驗證過候選數精確吻合的「參數自動最佳化」。
+// 2026-07-31修正：檔數/持有天數的搜尋網格改成主管跟使用者當天決議的新規模——
+// 至少15-20檔(不再測5檔/不限)、持有天數不再測10天這種太短的區間(主管認為10-15天
+// 太短，摩擦成本太高)，改測20~60天。換股門檻(replaceThresholdPct)也一起丟進網格，
+// 因為要不要換股、換多少門檻，會跟持有天數互相影響，兩個一起搜才找得到真正的甜蜜點。
 function buildExtendedOptimizerCandidates(baseParams) {
   const rows = [];
-  for (const minUpgradePct of [0, 3, 6]) {
+  for (const minUpgradePct of [0, 5]) {
     for (const minAnalystCount of [1, 3]) {
       for (const minUpside of [0, 0.05]) {
         for (const sizingMode of ['equal', 'by_upgrade', 'composite', 'enhanced']) {
-          for (const maxHoldDays of [10, 20]) {
-            for (const maxPositions of [0, 5, 10, 20]) {
-              rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+          for (const maxHoldDays of [20, 40, 60]) {
+            for (const maxPositions of [10, 15, 20]) {
+              for (const replaceThresholdPct of [10, 20]) {
+                rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, replaceThresholdPct, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+              }
             }
           }
         }
@@ -2494,9 +2568,16 @@ async function runStrictSearchAndRender() {
   applyParamsToForm(selected.params);
   setDateField('start', '2023-01-01');
   setDateField('end', testEnd);
-  runAndRenderManual(LAST_BEST_EXCESS);
+  // 2026-07-31修正：這裡呼叫runAndRenderManual()之前沒有接住回傳值更新LAST_RUN_SUMMARY，
+  // 導致這個全域變數永遠停在init()一開始、優化器套用新參數「之前」的舊結果。下面原本
+  // 還有一行`renderCards(LAST_RUN_SUMMARY, ...)`，用這個過期的全域變數又重繪一次卡片，
+  // 把runAndRenderManual()剛畫好的正確結果蓋回舊的——等於每次網頁載入自動跑完最佳化，
+  // 最上面的hero卡片實際顯示的都是「套用新參數之前」那組舊數字，跟下面帳本/曲線(用
+  // runAndRenderManual()回傳的rows，是對的)完全對不起來。這裡改成接住回傳值更新
+  // LAST_RUN_SUMMARY，並移除下面那行多餘且會蓋掉正確結果的重複renderCards()呼叫。
+  const { summary: freshSummary } = runAndRenderManual(LAST_BEST_EXCESS);
+  LAST_RUN_SUMMARY = freshSummary;
 
-  renderCards(LAST_RUN_SUMMARY, LAST_BEST_EXCESS, CURRENT_ROWS);
   return { selected, testEnd, isOverfit };
 }
 
@@ -2611,6 +2692,7 @@ const SENSITIVITY_SWEEPS = {
   maxWeightPerStock: { label: '單檔最大權重', unit: '%', anchors: [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50], fmt: v => `${(v * 100).toFixed(0)}%` },
   maxHoldDays: { label: '最長持有天數', unit: '交易日', anchors: [5, 10, 15, 20, 25, 30, 40, 60], fmt: v => `${v}日` },
   maxPositions: { label: '最大持股數', unit: '檔', anchors: [1, 2, 3, 5, 8, 10, 15, 20, 0], fmt: v => v === 0 ? '不限' : `${v}檔` },
+  replaceThresholdPct: { label: '換股門檻', unit: 'pp', anchors: [0, 5, 10, 15, 20, 25, 30, 40], fmt: v => `${v}pp` },
 };
 
 function buildSweepValues(key, currentValue) {
