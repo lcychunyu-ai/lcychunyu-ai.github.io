@@ -2494,6 +2494,10 @@ function renderSearchProgress(container, done, total, stageLabel) {
     </div>`;
 }
 
+// 2026-08-01改寫：欄位從「單一區間的summary」(總報酬/Sharpe/回撤/交易數)換成滾動
+// walk-forward的樣本外統計(勝率/平均每段超額報酬/驗證段數)，因為排序依據已經改成
+// rollingScore，欄位要跟著顯示真正決定排名的數字，不能繼續show一個跟排序無關的
+// 單一區間總報酬(那樣使用者會看不懂「為什麼這組排第一，數字卻不是最高」)。
 function renderGridTable(container, results) {
   if (!results.length) { container.innerHTML = '<div class="empty-state" style="padding:20px;">這段區間找不到有效參數組合。</div>'; return; }
   const top = results.slice(0, 10);
@@ -2501,16 +2505,14 @@ function renderGridTable(container, results) {
     <tr class="grid-result-row${i === 0 ? ' best' : ''}">
       <td class="mono">${i + 1}</td>
       <td style="font-size:11.5px;">${paramSummaryLabel(r.params)}</td>
-      <td class="mono" style="color:${r.summary.excessReturnPct >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.summary.excessReturnPct)}</td>
-      <td class="mono">${fmtPct(r.summary.totalReturnPct)}</td>
-      <td class="mono">${fmtNum2(r.summary.sharpe)}</td>
-      <td class="mono">${fmtPct(r.summary.maxDrawdownPct)}</td>
-      <td class="mono">${r.summary.nTrades}</td>
+      <td class="mono" style="color:${r.winRate >= 50 ? 'var(--up)' : 'var(--down)'};">${r.winRate.toFixed(1)}%</td>
+      <td class="mono" style="color:${r.avgExcess >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.avgExcess)}</td>
+      <td class="mono">${r.nWindows}段</td>
     </tr>`).join('');
   container.innerHTML = `
     <div class="table-wrap">
       <table class="book-table">
-        <thead><tr><th>#</th><th>參數組合</th><th>超額報酬</th><th>總報酬</th><th>Sharpe</th><th>最大回撤</th><th>交易數</th></tr></thead>
+        <thead><tr><th>#</th><th>參數組合</th><th>樣本外勝率</th><th>平均每段超額</th><th>驗證段數</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>`;
@@ -2596,13 +2598,16 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress, cand
   // 這次改用floorIdx鎖底(Math.max(idx,floorIdx))重現，不是直接filter掉。
   const evUp2023 = buildFoldEvUp('2023-01-01');
   const evUp2024 = buildFoldEvUp('2024-01-01');
-  const evUp2025 = buildFoldEvUp('2025-01-01');
   const evUp2026 = buildFoldEvUp('2026-01-01');
 
-  // 2026-07-29新增candidateBuilder參數：預設用buildOptimizerCandidates(跟同事192組候選
-  // 完全對上的原始網格)，runStrictSearchAndRender()依radio選的模式傳入含equal/調升幅度
-  // 加權的延伸網格(buildExtendedOptimizerCandidates)，兩邊共用同一套兩段walk-forward
-  // 選參邏輯，不用重寫一次。
+  // 2026-08-01重寫(experiment分支)：第二輪原本只用「2023-2024訓練→2025驗證」單一一段
+  // 驗證做最終選擇，樣本只有2次獨立切段，容易過度配適(這幾天已經實測過一次：優化器
+  // 選出的組合在全期間表現遠差於手動設定的官方推薦參數)。改成對每個候選跑完整滾動
+  // walk-forward(computeRollingWindows()，12個月訓練/3個月驗證，滾動切過2023-2026全部
+  // 資料)，用「樣本外勝率為主、平均超額報酬為輔」的分數選出最終參數(rollingScore =
+  // winRate + avgExcess*10，win rate每1pp的權重約等於avgExcess每0.1pp，呼應這幾天
+  // 驗證出來的「穩定度優先、但可以合理換取報酬率」原則)。第一輪快篩(2023訓練→2024
+  // 驗證)維持不變，只是用來把384組候選先篩到24組、控制運算量，不是過度配適的根因。
   const candidates = (candidateBuilder || buildOptimizerCandidates)(baseParams);
   const fold1 = [];
   for (let i = 0; i < candidates.length; i++) {
@@ -2610,28 +2615,32 @@ async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress, cand
     const train2023 = runBacktest(p, '2023-01-01', '2023-12-31', evUp2023).summary;
     const validate2024 = runBacktest(p, '2024-01-01', '2024-12-31', evUp2024).summary;
     fold1.push({ params: p, train2023, validate2024, score: rankValueOptimizer(validate2024) + rankValueOptimizer(train2023) * 0.25 });
-    if (i % 8 === 7 && onProgress) { onProgress(i + 1, candidates.length + 24, '第一輪(2023訓練→2024驗證)'); await new Promise(r => setTimeout(r, 0)); }
+    if (i % 8 === 7 && onProgress) { onProgress(i + 1, candidates.length + 24 * 11, '第一輪快篩(2023訓練→2024驗證)'); await new Promise(r => setTimeout(r, 0)); }
   }
   fold1.sort((a, b) => b.score - a.score);
   const shortlisted = fold1.slice(0, 24);
 
   const fold2 = [];
+  let doneCount = candidates.length;
   for (let i = 0; i < shortlisted.length; i++) {
     const fold = shortlisted[i];
-    const train = runBacktest(fold.params, '2023-01-01', '2024-12-31', evUp2023).summary;
-    const validation = runBacktest(fold.params, '2025-01-01', '2025-12-31', evUp2025).summary;
-    const selectionScore = (rankValueOptimizer(fold.validate2024) + rankValueOptimizer(validation)) / 2 + rankValueOptimizer(train) * 0.20;
-    fold2.push({ params: fold.params, train2023: fold.train2023, validate2024: fold.validate2024, train, validation, selectionScore });
-    if (onProgress) { onProgress(candidates.length + i + 1, candidates.length + 24, '第二輪(2023-2024訓練→2025驗證)'); await new Promise(r => setTimeout(r, 0)); }
+    const rollingWindows = computeRollingWindows(fold.params);
+    const excesses = rollingWindows.map(w => w.excess).filter(v => v != null);
+    const avgExcess = excesses.length ? excesses.reduce((a, b) => a + b, 0) / excesses.length : -Infinity;
+    const winRate = excesses.length ? excesses.filter(v => v > 0).length / excesses.length * 100 : 0;
+    const rollingScore = winRate + avgExcess * 10;
+    fold2.push({ params: fold.params, train2023: fold.train2023, validate2024: fold.validate2024, rollingWindows, avgExcess, winRate, nWindows: excesses.length, rollingScore });
+    doneCount += (rollingWindows.length || 11);
+    if (onProgress) { onProgress(doneCount, candidates.length + shortlisted.length * 11, `第二輪滾動驗證(${i + 1}/${shortlisted.length})`); await new Promise(r => setTimeout(r, 0)); }
   }
-  fold2.sort((a, b) => b.selectionScore - a.selectionScore);
+  fold2.sort((a, b) => b.rollingScore - a.rollingScore);
   const selected = fold2[0];
   const test = runBacktest(selected.params, '2026-01-01', endDate, evUp2026).summary;
   const full = runBacktest(selected.params, '2023-01-01', endDate, evUp2023).summary;
   return {
     candidateCount: candidates.length,
     selected, test, full,
-    shortlist: fold2.map(x => ({ params: x.params, summary: x.train })),
+    shortlist: fold2,
   };
 }
 
@@ -2664,25 +2673,24 @@ async function runStrictSearchAndRender() {
   btn.disabled = false;
 
   const { selected, test, full } = result;
-  const trainSummary = selected.train, validSummary = selected.validation;
-  LAST_BEST_EXCESS = { excess: full ? full.excessReturnPct : null, sub: `兩段walk-forward選定參數套用全期間` };
+  LAST_BEST_EXCESS = { excess: full ? full.excessReturnPct : null, sub: `滾動walk-forward選定參數套用全期間` };
 
-  // 過擬合檢查：驗證期超額報酬轉負、或比訓練期衰退超過一半，都視為警訊。
-  const trainExcess = trainSummary.excessReturnPct;
-  const validExcess = validSummary ? validSummary.excessReturnPct : null;
-  const isOverfit = validExcess == null || validExcess < 0 || (trainExcess > 0 && validExcess < trainExcess * 0.5);
+  // 2026-08-01改寫：過擬合檢查改用樣本外勝率(不是單一段驗證期超額報酬)——勝率低於
+  // 50%代表這組參數連過半數的獨立樣本外驗證段都打不贏大盤，比舊版「驗證期一段轉負」
+  // 的判斷標準更穩健(11段獨立驗證，不是1段)。
+  const isOverfit = selected.winRate < 50;
   const badgeClass = isOverfit ? 'caution' : 'safe';
-  const badgeText = isOverfit ? '驗證期表現衰退，疑似過度配適' : '樣本外驗證通過';
+  const badgeText = isOverfit ? '樣本外勝率不到五成，穩定度存疑' : '樣本外驗證通過';
 
   out.innerHTML = '';
   const recGrid = document.createElement('div');
   recGrid.className = 'recommend-grid';
   recGrid.innerHTML = `
     <div class="recommend-card">
-      <h4>兩段walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
+      <h4>滾動walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
       <div class="mini-stat-row">
-        <div class="mini-stat"><div class="label">訓練期策略報酬</div><div class="value ${trainSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(trainSummary.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(trainSummary.totalTaiexReturnPct)} · 超額 ${fmtPct(trainSummary.excessReturnPct)}</div></div>
-        <div class="mini-stat"><div class="label">驗證期策略報酬</div><div class="value ${validSummary && validSummary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(validSummary?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(validSummary?.totalTaiexReturnPct)} · 超額 ${fmtPct(validSummary?.excessReturnPct)}</div></div>
+        <div class="mini-stat"><div class="label">樣本外滾動勝率</div><div class="value ${selected.winRate >= 50 ? 'up' : 'down'}">${selected.winRate.toFixed(1)}%</div><div class="sub">${selected.nWindows}段獨立驗證中打贏大盤的比例</div></div>
+        <div class="mini-stat"><div class="label">平均每段超額報酬</div><div class="value ${selected.avgExcess >= 0 ? 'up' : 'down'}">${fmtPct(selected.avgExcess)}</div><div class="sub">12個月訓練→3個月驗證，逐段滾動</div></div>
         <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value ${test && test.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(test?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(test?.totalTaiexReturnPct)} · 超額 ${fmtPct(test?.excessReturnPct)}</div></div>
       </div>
       <div class="param-summary-line">${paramSummaryLabel(selected.params)}</div>
@@ -2697,8 +2705,8 @@ async function runStrictSearchAndRender() {
   disclaimer.className = 'disclaimer-bar';
   const candidateNote = `${totalCandidates}組候選(涵蓋全部4種配置方式)`;
   disclaimer.textContent = isOverfit
-    ? `${candidateNote}經兩段walk-forward選出，在驗證期(2025)表現明顯轉弱，代表很可能只是配適到訓練期的雜訊，不建議直接採用。2026保留期只揭露一次結果，不會回頭影響推薦參數。`
-    : `${candidateNote}經兩段walk-forward(2023訓練→2024驗證，再2023-2024訓練→2025驗證)綜合排名選出。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。`;
+    ? `${candidateNote}先用2023訓練→2024驗證快篩到24組，再對每組跑完整滾動walk-forward(12個月訓練/3個月驗證，逐段滾動)，但這組結果樣本外勝率不到五成，代表很可能只是配適到雜訊，不建議直接採用。2026保留期只揭露一次結果，不會回頭影響推薦參數。`
+    : `${candidateNote}先用2023訓練→2024驗證快篩到24組，再對每組跑完整滾動walk-forward(12個月訓練/3個月驗證，逐段滾動)選出樣本外勝率+平均超額報酬綜合最佳的參數，比單一驗證段更不容易過度配適。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。`;
   out.appendChild(disclaimer);
 
   const trainTableWrap = document.createElement('details');
