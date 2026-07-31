@@ -502,6 +502,10 @@
             <div class="param-field"><label>手續費率（單邊，已含折數）</label><div class="input-suffix"><input type="number" id="p-commission" value="0.0855" step="0.01" min="0" max="1"/><span class="suffix">%</span></div></div>
             <div class="param-field" style="margin-bottom:0;"><label>滑價估計（單邊，保守假設值）</label><div class="input-suffix"><input type="number" id="p-slippage" value="0.15" step="0.05" min="0" max="2"/><span class="suffix">%</span></div></div>
           </div>
+          <div class="param-field" style="margin-bottom:0;">
+            <label>再平衡門檻（偏離幅度未達此值不動作，省成本）</label>
+            <div class="input-suffix"><input type="number" id="p-rebalanceThreshold" value="5" step="1" min="0" max="30"/><span class="suffix">%pt，0=每天都對齊(原始行為)</span></div>
+          </div>
 
           <div class="param-field" style="margin-bottom:0;">
             <label>配置方式</label>
@@ -1494,13 +1498,22 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
           sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
         }
         const delta = w - oldW;
-        if (Math.abs(delta) > 1e-9) {
+        // 2026-07-31新增(實驗性)：門檻式再平衡——進出場(買賣穿越0)一律照做，不受門檻限制；
+        // 但「部位還在手上、只是分數變化想微調權重」這種SIGNAL_REBALANCE，只有偏離幅度
+        // 超過rebalanceThreshold才真的執行(付成本)，偏離不夠大就放著讓它自然漂移，之後
+        // 累積夠大再一次觸發。目的是想保留大部分「再平衡premium」(已驗證是報酬來源，不只是
+        // 成本)，同時省掉大量偏離很小、成本不划算的日常微調。rebalanceThreshold=0代表沿用
+        // 原本「每天都對齊」的行為。
+        const isRebalanceOnly = !isBuyCrossing && !isSellCrossing;
+        const skipRebalance = isRebalanceOnly && p.rebalanceThreshold > 0 && Math.abs(delta) < p.rebalanceThreshold;
+        if (!skipRebalance && Math.abs(delta) > 1e-9) {
           const reason = isBuyCrossing ? (isFreshSignal ? 'QUALIFIED_UPGRADE' : 'RANK_RECOVERED') : (isSellCrossing ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
           orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
           if (delta < 0) tradingCost += Math.abs(delta) * sellCostRate;
           else tradingCost += delta * buyCostRate;
         }
-        if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
+        if (skipRebalance) weightNow.set(t, oldW);
+        else if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
       }
     }
 
@@ -1637,6 +1650,7 @@ function readParams() {
     partialTakeFraction: Number(document.getElementById('p-partialTakeFraction').value) / 100,
     commissionRate: Number(document.getElementById('p-commission').value) / 100,
     slippageRate: Number(document.getElementById('p-slippage').value) / 100,
+    rebalanceThreshold: Number(document.getElementById('p-rebalanceThreshold').value) / 100,
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,
     sizingMode: document.getElementById('p-sizing').value,
