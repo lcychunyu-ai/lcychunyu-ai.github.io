@@ -380,6 +380,13 @@ class StrategyParams:
                                              # 滾動切過11段)驗證過：10%停損讓打贏大盤的季數
                                              # 比例從54.5%提升到72.7%(平均報酬略降，但這是
                                              # 使用者2026-08-01明確裁示的優先順序：穩定度>總報酬)
+    commission_rate: float = 0.000855       # 2026-07-31新增：手續費率(單邊，已含約6折折數，
+                                             # 原始費率0.1425%)。買賣雙邊都課，跟只對賣方課的
+                                             # 證交稅不同。
+    slippage_rate: float = 0.0015           # 2026-07-31新增：滑價估計(單邊，固定保守假設值
+                                             # 15bps)，買賣雙邊都課。目前不是依個股成交量精算——
+                                             # stock_prices還沒有完整歷史成交量可用，等有明確
+                                             # 資金規模時再投入量能精算，現階段用保守固定值。
 
     sizing_mode: Literal["equal", "by_upgrade", "composite", "enhanced"] = "equal"
     composite_alpha: float = 1.0
@@ -601,9 +608,12 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                 reason = "停損出場"
             if reason:
                 exited.append((t, reason))
-        # tax_cost累加這一天所有賣出動作(含正式出場+每日再平衡的減碼)課到的證交稅，
-        # 最後從daily_ret扣掉——強制再平衡下，權重的任何減少都是真實賣出動作。
-        tax_cost = 0.0
+        # trading_cost累加這一天所有買賣動作課到的成本，最後從daily_ret扣掉——強制再平衡
+        # 下，權重的任何變化都是真實買賣動作。證交稅只對賣方課(台股現制)，手續費+滑價
+        # 買賣雙邊都課。
+        sell_cost_rate = TRANSACTION_TAX_RATE + p.commission_rate + p.slippage_rate
+        buy_cost_rate = p.commission_rate + p.slippage_rate
+        trading_cost = 0.0
         for t, reason in exited:
             active.pop(t)
             exit_price = stock_price_open.get(t, pd.Series(dtype=float)).get(day, np.nan) if stock_price_open else np.nan
@@ -619,7 +629,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             if old_w > 1e-9:
                 orders.append({"date": day, "ticker": t, "side": "SELL", "weight_before": old_w,
                                 "weight_after": 0.0, "weight_change": -old_w, "price": exit_price, "reason": reason})
-                tax_cost += old_w * TRANSACTION_TAX_RATE
+                trading_cost += old_w * sell_cost_rate
 
         # --- 新訊號：合格的更新/加入active資格池，重設entry_idx跟目標價，不管這檔股票今天
         # 在不在active裡都要覆蓋——新訊號代表重新起算持有天數，不能拿舊訊號殘留的資訊繼續
@@ -693,7 +703,9 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
                                     "weight_before": old_w, "weight_after": w, "weight_change": delta,
                                     "price": price_now, "reason": reason})
                     if delta < 0:
-                        tax_cost += abs(delta) * TRANSACTION_TAX_RATE
+                        trading_cost += abs(delta) * sell_cost_rate
+                    else:
+                        trading_cost += delta * buy_cost_rate
                 if w > 1e-9:
                     weight_now[t] = w
                 else:
@@ -708,7 +720,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             if not np.isnan(close_now) and not np.isnan(open_now) and open_now != 0:
                 intraday_ret += w * (close_now / open_now - 1)
 
-        daily_ret = overnight_ret + intraday_ret - tax_cost
+        daily_ret = overnight_ret + intraday_ret - trading_cost
 
         # 2026-07-28修正：taiex_ret是對「全部歷史」(calendar，2021年至今)一次算好的
         # pct_change()全域序列，不是針對這次回測視窗算的。如果視窗起始日不是calendar裡
@@ -738,7 +750,7 @@ def run_backtest(p: StrategyParams, ev: pd.DataFrame, stock_price: dict, taiex: 
             "exposure": sum(drifted_at_close.values()),
             "daily_return": daily_ret,
             "taiex_return": taiex_ret_today,
-            "tax_cost": tax_cost,
+            "tax_cost": trading_cost,
         })
 
         # --- 收盤後把weight_now換成剛剛算好的drifted_at_close，作為明天隔夜段的起始

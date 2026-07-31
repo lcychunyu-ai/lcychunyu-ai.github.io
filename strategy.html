@@ -498,6 +498,10 @@
             <div class="param-field"><label>分批停利門檻（進場到目標價的%）</label><div class="input-suffix"><input type="number" id="p-partialTakeThreshold" value="70" step="10" min="0" max="100"/><span class="suffix">%</span></div></div>
             <div class="param-field" style="margin-bottom:0;"><label>分批停利比例</label><div class="input-suffix"><input type="number" id="p-partialTakeFraction" value="30" step="10" min="0" max="100"/><span class="suffix">%，0=不啟用</span></div></div>
           </div>
+          <div class="param-row2">
+            <div class="param-field"><label>手續費率（單邊，已含折數）</label><div class="input-suffix"><input type="number" id="p-commission" value="0.0855" step="0.01" min="0" max="1"/><span class="suffix">%</span></div></div>
+            <div class="param-field" style="margin-bottom:0;"><label>滑價估計（單邊，保守假設值）</label><div class="input-suffix"><input type="number" id="p-slippage" value="0.15" step="0.05" min="0" max="2"/><span class="suffix">%</span></div></div>
+          </div>
 
           <div class="param-field" style="margin-bottom:0;">
             <label>配置方式</label>
@@ -1338,7 +1342,13 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
     }
 
     // 2026-08-01新增(實驗性)：分批停利
-    let taxCost = 0;
+    // 2026-07-31新增：交易成本模型從「只算證交稅」擴充成「證交稅(僅賣出)+手續費(買賣雙邊)
+    // +滑價(買賣雙邊，固定bps保守假設)」。滑價目前用固定值，不是依個股成交量精算——真正
+    // 依量能/單量比例算滑價需要stock_prices補上volume欄位並回補歷史成交量，這是之後有
+    // 明確資金規模時才值得投入的精算，現階段用保守固定值先確保結論方向正確。
+    const sellCostRate = TRANSACTION_TAX_RATE + p.commissionRate + p.slippageRate;
+    const buyCostRate = p.commissionRate + p.slippageRate;
+    let tradingCost = 0;
     if (p.partialTakeFraction > 0) {
       for (const [t, a] of active) {
         if (a.partialTaken || a.target == null || a.entryPriceToday == null) continue;
@@ -1355,7 +1365,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
             const newW = oldW - trimAmount;
             driftedAtOpen.set(t, newW);
             weightNow.set(t, newW);
-            taxCost += trimAmount * TRANSACTION_TAX_RATE;
+            tradingCost += trimAmount * sellCostRate;
             orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: newW, weightChange: -trimAmount, price: execPrice, reason: '分批停利' });
           }
           a.partialTaken = true;
@@ -1411,7 +1421,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       }
       if (oldW > 1e-9) {
         orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPrice, reason });
-        taxCost += oldW * TRANSACTION_TAX_RATE;
+        tradingCost += oldW * sellCostRate;
       }
     }
 
@@ -1487,7 +1497,8 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
         if (Math.abs(delta) > 1e-9) {
           const reason = isBuyCrossing ? (isFreshSignal ? 'QUALIFIED_UPGRADE' : 'RANK_RECOVERED') : (isSellCrossing ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
           orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
-          if (delta < 0) taxCost += Math.abs(delta) * TRANSACTION_TAX_RATE;
+          if (delta < 0) tradingCost += Math.abs(delta) * sellCostRate;
+          else tradingCost += delta * buyCostRate;
         }
         if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
       }
@@ -1507,7 +1518,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       if (r != null) intradayRet += w * r;
       attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, referenceClose: a ? a.referenceClose : null, isEntryDay });
     }
-    const dailyRet = overnightRet + intradayRet - taxCost;
+    const dailyRet = overnightRet + intradayRet - tradingCost;
     // 2026-07-28修正：TAIEX_RET是loadAll()時對「全部歷史」一次算好的全域陣列(2021年至今)，
     // 不是針對「這次回測視窗」算的。如果回測起始日不是資料庫裡最早的那天(例如startDate=
     // 2023-01-01，但DATES其實從2021年就有資料)，TAIEX_RET[startIdx]算的是「視窗外前一天
@@ -1540,7 +1551,7 @@ function runBacktest(p, startDate, endDate, evUpOverride) {
       holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
       attribution, overnightAttribution,
       nPositions: weightNow.size, exposure,
-      dailyReturn: dailyRet, taiexReturn: taiexRet, taxCost,
+      dailyReturn: dailyRet, taiexReturn: taiexRet, tradingCost,
       buys: buysToday, sells: sellsToday,
       sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
     });
@@ -1624,6 +1635,8 @@ function readParams() {
     trailingStopPct: Number(document.getElementById('p-trailingStop').value),
     partialTakeThresholdPct: Number(document.getElementById('p-partialTakeThreshold').value),
     partialTakeFraction: Number(document.getElementById('p-partialTakeFraction').value) / 100,
+    commissionRate: Number(document.getElementById('p-commission').value) / 100,
+    slippageRate: Number(document.getElementById('p-slippage').value) / 100,
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,
     sizingMode: document.getElementById('p-sizing').value,
