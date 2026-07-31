@@ -466,11 +466,15 @@
         <fieldset>
           <legend>訊號篩選門檻</legend>
           <div class="param-row2">
-            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="0" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="2" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
             <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1" min="0"/><span class="suffix">位</span></div></div>
           </div>
-          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="0" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
+          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="4" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
           <p class="hint" style="margin:8px 0 0;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
+          <p class="hint" style="margin:4px 0 0;">2026-07-31：手續費/滑價無法調整後，用滾動walk-forward網格掃描篩選門檻，目前
+          預設值(調升≥2%、上漲空間≥4%)是網格裡rollingScore最高的組合，全期間超額轉正，但滾動勝率
+          仍只有45.5%(5/11)、平均每季超額仍是負的——只是全期間總數字被少數幾季撐起來，還沒達到
+          真正穩定的門檻，不是已解決的結論。</p>
         </fieldset>
 
         <fieldset>
