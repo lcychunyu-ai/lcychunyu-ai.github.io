@@ -1,0 +1,3172 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>【測試中／尚未定案】策略回測研究版 · Revision Lab</title>
+<script>
+  // 2026-07-30新增：一進頁面就先套用使用者上次選的深/淺色，趕在CSS渲染前設定好
+  // document.documentElement的data-theme屬性，避免「先閃一下系統預設色、才跳成
+  // 使用者選的顏色」的畫面閃爍(FOUC)。放在<head>最前面、<style>之前執行。
+  (function () {
+    const saved = localStorage.getItem('theme-pref');
+    const resolved = (saved === 'dark' || saved === 'light') ? saved : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.dataset.theme = resolved;
+  })();
+</script>
+<style>
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f14; --bg-grad: radial-gradient(1200px 600px at 15% -10%, #131c26 0%, #0b0f14 55%);
+      --panel: #121821; --panel-2: #161d27; --panel-3: #1a222d; --border: #232c38;
+      --ink: #e8ecf2; --ink-dim: #8a95a5; --ink-faint: #566073;
+      --accent: #d9a94f; --accent-ink: #1a1206;
+      --up: #ef5b57; --up-dim: #3a2224; --down: #33ab7a; --down-dim: #1c332b; --grid: #1e2733;
+      --warn: #d9a94f; --warn-dim: #3a2f16; --warn-ink: #1a1206;
+      --safe: #33ab7a; --safe-dim: #14261d; --safe-ink: #06150e;
+      --chip-bg: #1a222d;
+    }
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f2ec; --bg-grad: radial-gradient(1200px 600px at 15% -10%, #fbfaf6 0%, #f4f2ec 55%);
+      --panel: #ffffff; --panel-2: #faf8f3; --panel-3: #f1eee5; --border: #e3ddcd;
+      --ink: #1c1f24; --ink-dim: #63615a; --ink-faint: #96938a;
+      --accent: #b3801f; --accent-ink: #fff8ea;
+      --up: #d33c37; --up-dim: #fbe4e2; --down: #17835a; --down-dim: #dcf1e7; --grid: #eae5d8;
+      --warn: #b3801f; --warn-dim: #f6ecd4; --warn-ink: #2b1c02;
+      --safe: #17835a; --safe-dim: #dcf1e7; --safe-ink: #06301f;
+      --chip-bg: #f1eee5;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0f14; --bg-grad: radial-gradient(1200px 600px at 15% -10%, #131c26 0%, #0b0f14 55%);
+    --panel: #121821; --panel-2: #161d27; --panel-3: #1a222d; --border: #232c38;
+    --ink: #e8ecf2; --ink-dim: #8a95a5; --ink-faint: #566073;
+    --accent: #d9a94f; --accent-ink: #1a1206;
+    --up: #ef5b57; --up-dim: #3a2224; --down: #33ab7a; --down-dim: #1c332b; --grid: #1e2733;
+    --warn: #d9a94f; --warn-dim: #3a2f16; --warn-ink: #1a1206;
+    --safe: #33ab7a; --safe-dim: #14261d; --safe-ink: #06150e;
+    --chip-bg: #1a222d;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f2ec; --bg-grad: radial-gradient(1200px 600px at 15% -10%, #fbfaf6 0%, #f4f2ec 55%);
+    --panel: #ffffff; --panel-2: #faf8f3; --panel-3: #f1eee5; --border: #e3ddcd;
+    --ink: #1c1f24; --ink-dim: #63615a; --ink-faint: #96938a;
+    --accent: #b3801f; --accent-ink: #fff8ea;
+    --up: #d33c37; --up-dim: #fbe4e2; --down: #17835a; --down-dim: #dcf1e7; --grid: #eae5d8;
+    --warn: #b3801f; --warn-dim: #f6ecd4; --warn-ink: #2b1c02;
+    --safe: #17835a; --safe-dim: #dcf1e7; --safe-ink: #06301f;
+    --chip-bg: #f1eee5;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg-grad), var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { max-width: 100%; overflow-x: hidden; }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  button, select, input { font-family: inherit; }
+  a { color: inherit; }
+
+  .wrap { max-width: 1220px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 24px; padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--bg);
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; letter-spacing: -0.02em;
+    flex-shrink: 0;
+  }
+  .brand .name { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
+  .nav-pills { display: flex; gap: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 100px; padding: 3px; }
+  .nav-pills a {
+    font-size: 12.5px; font-weight: 700; color: var(--ink-dim); text-decoration: none;
+    padding: 7px 16px; border-radius: 100px; transition: background .12s ease, color .12s ease;
+  }
+  .nav-pills a.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  .status-tag { font-size: 11.5px; color: var(--ink-faint); display: flex; align-items: center; gap: 6px; }
+  .status-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--safe); }
+
+  /* 2026-07-30新增：淺色/深色切換按鈕——原本CSS的--bg/--panel等token已經有
+     :root[data-theme="dark"]/[data-theme="light"]兩套覆寫值(當初做深色模式支援時
+     順手加的)，只是一直沒有按鈕可以切換，只能被動跟著系統設定走。這裡補上按鈕跟JS。 */
+  .theme-toggle-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+    border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--ink-dim);
+    cursor: pointer; flex-shrink: 0; transition: border-color .12s ease, color .12s ease;
+  }
+  .theme-toggle-btn:hover { color: var(--ink); border-color: var(--accent); }
+  .theme-toggle-btn svg { width: 16px; height: 16px; }
+  .theme-toggle-btn .icon-moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle-btn .icon-moon { display: block; }
+
+  section { margin-bottom: 22px; }
+
+  .eyebrow-row { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+  .step-num {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--ink); color: var(--bg);
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 11.5px; flex-shrink: 0;
+  }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-faint); }
+  .block-title { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; margin: 4px 0 14px 36px; }
+
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .panel.tight { padding: 14px 16px; }
+
+  .param-field { margin-bottom: 12px; }
+  .param-field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-dim); margin-bottom: 4px; }
+  .param-field .hint { font-size: 10.5px; color: var(--ink-faint); margin-top: 3px; }
+  .param-field input[type="number"], .param-field input[type="date"], .param-field select, .param-field input[type="text"] {
+    width: 100%; font-size: 13px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 9px; transition: border-color .12s ease;
+  }
+  .param-field input:focus, .param-field select:focus { outline: none; border-color: var(--accent); }
+  .date-ymd { display: flex; gap: 4px; }
+  .date-ymd select { flex: 1; min-width: 0; padding: 7px 4px 7px 8px; font-size: 12.5px; }
+  .date-ymd select:nth-child(1) { flex: 1.3; }
+  .param-field select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2396938a' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; cursor: pointer;
+  }
+  /* 2026-07-29新增：產業/主題篩選改成可複選的checkbox下拉——原本單選<select>沒辦法同時
+     選「半導體+通訊網路」這種組合，改成自訂的trigger按鈕+彈出面板，面板內用checkbox
+     分組(主題/官方產業鏈)列出，選了幾個就在按鈕上顯示摘要。 */
+  .multiselect { position: relative; }
+  .multiselect-trigger {
+    width: 100%; text-align: left; font-size: 13px; color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 28px 7px 9px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2396938a' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .multiselect-trigger:focus { outline: none; border-color: var(--accent); }
+  .multiselect-panel {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+    max-height: 280px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 8px;
+  }
+  .multiselect-panel.open { display: block; }
+  .multiselect-panel .ms-group-label { font-size: 10px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; padding: 6px 6px 3px; }
+  .multiselect-panel label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-dim); padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+  .multiselect-panel label:hover { background: var(--panel-2); }
+  .multiselect-panel input[type="checkbox"] { accent-color: var(--accent); }
+  .input-suffix { position: relative; }
+  .input-suffix input { padding-right: 40px !important; }
+  .input-suffix .suffix {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 10.5px; color: var(--ink-faint); font-weight: 600; pointer-events: none;
+  }
+  .param-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .param-field.checkbox {
+    display: flex; align-items: center; gap: 9px; padding: 8px 10px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+  }
+  .param-field.checkbox label { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--ink); cursor: pointer; }
+  .param-field.checkbox input[type="checkbox"] {
+    width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
+  }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px 6px; margin: 0 0 14px; }
+  legend { font-size: 10.5px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 6px; }
+  .date-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+  .date-presets button {
+    font-size: 11px; font-weight: 600; color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 100px; padding: 4px 10px; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .date-presets button:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .date-presets button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+  .btn {
+    font-size: 13.5px; font-weight: 700; color: var(--bg); background: var(--ink);
+    border: none; border-radius: 9px; padding: 11px; cursor: pointer; letter-spacing: 0.01em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  .btn.block { width: 100%; }
+  .btn:hover { filter: brightness(1.15); }
+  .btn.secondary { color: var(--ink); background: var(--panel-2); border: 1px solid var(--border); font-weight: 600; }
+  .btn.safe { color: var(--safe-ink); background: var(--safe); }
+  .btn.caution { color: var(--warn-ink); background: var(--warn); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.small { padding: 8px 14px; font-size: 12.5px; }
+
+  details.explainer-toggle > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-dim); list-style: none; }
+  details.explainer-toggle > summary::-webkit-details-marker { display: none; }
+  details.explainer-toggle > summary::before { content: "▶ "; font-size: 10px; }
+  details.explainer-toggle[open] > summary::before { content: "▼ "; }
+  details.explainer-toggle { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-2); }
+
+  .card-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+  @media (max-width: 760px) { .card-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 15px 17px; }
+  .stat-card .label { font-size: 11px; color: var(--ink-faint); font-weight: 600; }
+  .stat-card .value { font-size: 24px; font-weight: 800; margin-top: 5px; letter-spacing: -0.01em; }
+  .stat-card .value.up { color: var(--up); }
+  .stat-card .value.down { color: var(--down); }
+  .stat-card .value.muted { color: var(--ink-faint); font-size: 18px; }
+  .stat-card .sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 4px; }
+
+  /* ===== 一眼看重點的Hero區塊：一個headline數字+兩個直接構成它的子數字，
+     其他會混淆(複利買進持有)的數字改成可展開說明，不再跟headline同權重並排。===== */
+  .hero-block { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px 24px; margin-bottom: 14px; }
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  .hero-label { font-size: 12px; color: var(--ink-faint); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+  .hero-value { font-size: 44px; font-weight: 800; letter-spacing: -0.015em; margin-top: 6px; line-height: 1; }
+  .hero-value.up { color: var(--up); } .hero-value.down { color: var(--down); }
+  .hero-sub { font-size: 12px; color: var(--ink-dim); margin-top: 8px; }
+  .hero-badge { flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+  .hero-badge.up { background: var(--up-dim); color: var(--up); }
+  .hero-badge.down { background: var(--down-dim); color: var(--down); }
+  .hero-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .hero-mini .label { font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
+  .hero-mini .value { font-size: 19px; font-weight: 700; margin-top: 3px; }
+  .hero-mini .sub { font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+  .hero-detail-toggle { margin-top: 14px; }
+  .hero-detail-toggle summary { cursor: pointer; font-size: 11.5px; color: var(--ink-faint); font-weight: 600; list-style: none; }
+  .hero-detail-toggle summary::-webkit-details-marker { display: none; }
+  .hero-detail-toggle summary::before { content: "▶ "; font-size: 9px; }
+  .hero-detail-toggle[open] summary::before { content: "▼ "; }
+  .hero-detail-body { margin-top: 10px; padding: 12px 14px; background: var(--panel-2); border-radius: 10px; font-size: 11.5px; line-height: 1.7; color: var(--ink-dim); }
+  .hero-detail-body .value { font-size: 16px; font-weight: 700; color: var(--ink); }
+
+  /* ===== 側邊快速導航：sticky釘在主內容欄頂端，點了直接跳section，不用硬滑。===== */
+  .quicknav { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 10px 0 12px; margin-bottom: 6px;
+    display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .quicknav a { font-size: 11.5px; font-weight: 600; color: var(--ink-dim); text-decoration: none; padding: 6px 11px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--panel); white-space: nowrap; transition: all .12s ease; }
+  .quicknav a:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ===== 大表格預設收合，避免一次攤開幾百列數字：只留摘要，點了才展開。===== */
+  details.table-toggle { margin-top: 10px; }
+  details.table-toggle > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--accent); list-style: none; padding: 4px 0; }
+  details.table-toggle > summary::-webkit-details-marker { display: none; }
+  details.table-toggle > summary::before { content: "▶ "; font-size: 10px; }
+  details.table-toggle[open] > summary::before { content: "▼ "; }
+
+  .coverage-strip {
+    display: flex; flex-wrap: wrap; gap: 28px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 20px; margin-bottom: 18px;
+  }
+  .coverage-item .label { font-size: 10.5px; color: var(--ink-faint); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .coverage-item .value { font-size: 15px; font-weight: 700; margin-top: 3px; }
+
+  .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .legend-row { display: flex; gap: 16px; margin-bottom: 4px; font-size: 11.5px; color: var(--ink-dim); }
+  .legend-row .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  .chart-tooltip {
+    position: fixed; pointer-events: none; z-index: 50; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 11px; font-size: 11.5px; color: var(--ink); box-shadow: 0 6px 18px rgba(0,0,0,.25);
+    display: none; line-height: 1.6;
+  }
+
+  table.book-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.book-table th { text-align: left; font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  table.book-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  table.book-table tr:hover td { background: var(--panel-2); }
+  table.book-table tr.low-confidence td { opacity: .5; }
+  table.book-table tr.low-confidence:hover td { opacity: .8; }
+  .low-conf-tag { font-size: 9px; font-weight: 600; color: var(--ink-faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; margin-left: 6px; vertical-align: middle; }
+  .table-wrap { overflow-x: auto; }
+  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 100px; }
+  .tag.buy { background: var(--up-dim); color: var(--up); }
+  .tag.sell { background: var(--down-dim); color: var(--down); }
+
+  .explainer { font-size: 12.5px; line-height: 1.75; color: var(--ink-dim); }
+  .explainer b { color: var(--ink); }
+  .explainer .formula { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink); }
+
+  /* 2026-07-29新增：配置方式說明改成「白話優先、公式其次」的排版——模型名稱最粗最大，
+     白話說明正常字重，範例用強調色小標籤，公式參考縮小淡化放最後，人類肉眼掃過去
+     第一眼看到的是文字邏輯，不是一串符號。 */
+  .model-explain { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .model-explain:last-of-type { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+  .model-explain .model-name { font-size: 13px; font-weight: 700; color: var(--ink); margin: 0 0 4px; }
+  .model-explain .model-plain { font-size: 12.5px; line-height: 1.7; color: var(--ink-dim); margin: 0 0 6px; }
+  .model-explain .model-example { font-size: 12px; color: var(--ink-dim); background: var(--panel-2); border-radius: 6px; padding: 6px 10px; margin: 0 0 6px; }
+  .model-explain .model-example b { color: var(--accent); }
+  .model-explain .formula-ref { font-size: 10.5px; color: var(--ink-faint); font-family: ui-monospace, monospace; margin: 0; }
+
+  .empty-state { text-align: center; color: var(--ink-faint); font-size: 13px; }
+  .grid-result-row { cursor: pointer; }
+  .grid-result-row:hover td { background: var(--panel-2); }
+  .grid-result-row.best td { background: var(--safe-dim); }
+
+  .section-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; margin-bottom: 22px; }
+  .section-card.accent-safe { border-top: 3px solid var(--safe); }
+  .section-card.accent-caution { border-top: 3px solid var(--warn); }
+  .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+  .section-head .eyebrow { display: block; }
+  .section-head h3 { margin: 4px 0 0; font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+  .section-sub { font-size: 12px; color: var(--ink-dim); margin: 8px 0 16px; }
+  .optimizer-mode-toggle { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--ink-dim); }
+  .optimizer-mode-toggle label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .optimizer-mode-toggle input[type="radio"] { accent-color: var(--safe); }
+  .pill-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 100px; margin-left: 8px; vertical-align: middle; }
+  .pill-badge.safe { background: var(--safe-dim); color: var(--safe); }
+  .pill-badge.caution { background: var(--warn-dim); color: var(--warn); }
+
+  .recommend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 820px) { .recommend-grid { grid-template-columns: 1fr; } }
+  .recommend-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .recommend-card h4 { margin: 0 0 12px; font-size: 14px; font-weight: 800; }
+  .mini-stat-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 10px; }
+  .mini-stat .label { font-size: 10px; color: var(--ink-faint); font-weight: 600; }
+  .mini-stat .value { font-size: 17px; font-weight: 800; margin-top: 2px; }
+  .mini-stat .sub { font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+  .param-summary-line { font-size: 11px; color: var(--ink-faint); margin: 8px 0 12px; line-height: 1.6; }
+  .recommend-actions { display: flex; gap: 8px; }
+  .recommend-actions .btn { flex: 1; }
+
+  .disclaimer-bar {
+    background: var(--warn-dim); color: var(--warn-ink); border-radius: 10px; padding: 12px 14px;
+    font-size: 12px; margin-top: 16px; line-height: 1.65;
+  }
+  :root[data-theme="dark"] .disclaimer-bar, @media (prefers-color-scheme: dark) { }
+
+  .sensitivity-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; font-size: 11.5px; color: var(--ink-dim);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
+  }
+  .sensitivity-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .lg-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .lg-swatch { width: 14px; height: 11px; border-radius: 2px; display: inline-block; flex-shrink: 0; opacity: 0.85; }
+  .lg-line { width: 16px; height: 0; border-top: 1.4px dashed var(--ink-dim); display: inline-block; flex-shrink: 0; }
+  .lg-tag { font-size: 9.5px; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 4px; padding: 1px 6px; }
+
+  .sensitivity-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .sensitivity-summary-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .sensitivity-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .sensitivity-summary, .sensitivity-grid { grid-template-columns: 1fr; } }
+  .sensitivity-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 8px; }
+  .sensitivity-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .sensitivity-flag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .sensitivity-flag.flag-danger { background: var(--up-dim); color: var(--up); }
+  .sensitivity-flag.flag-warn { background: var(--warn-dim); color: var(--warn-ink); }
+  .sensitivity-flag.flag-ok { background: var(--safe-dim); color: var(--safe-ink); }
+
+  .capital-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .capital-row .param-field { margin: 0; min-width: 200px; }
+
+  .ledger-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ledger-controls select, .ledger-controls input[type="date"] {
+    font-size: 12.5px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--ink);
+  }
+  .ledger-controls label { font-size: 11.5px; color: var(--ink-dim); font-weight: 600; }
+
+  .brief-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+  .brief-panel .brief-eyebrow { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+  .brief-panel h4 { margin: 3px 0 10px; font-size: 15px; font-weight: 800; }
+  .brief-panel .brief-line { font-size: 12px; color: var(--ink-dim); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .brief-panel .brief-formula { font-size: 10.5px; color: var(--ink-faint); border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 4px; line-height: 1.6; }
+
+  .explain-block { border-left: 3px solid var(--safe); background: var(--panel-2); border-radius: 0 10px 10px 0; padding: 12px 16px; margin-bottom: 16px; }
+  .explain-block .brief-eyebrow { font-size: 10.5px; font-weight: 700; color: var(--safe); letter-spacing: 0.08em; text-transform: uppercase; }
+  .explain-block h4 { margin: 3px 0 8px; font-size: 14px; font-weight: 800; }
+  .explain-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+  .explain-row:last-child { margin-bottom: 0; }
+  .explain-row-label { font-size: 10.5px; font-weight: 700; color: var(--ink-faint); width: 128px; flex-shrink: 0; }
+  .explain-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-dim); background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+  .explain-chip b { color: var(--ink); font-weight: 700; }
+  .explain-chip-muted { color: var(--ink-faint); }
+  .explain-chip-buy { color: var(--up); border-color: var(--up-dim); background: var(--up-dim); }
+  .explain-chip-sell { color: var(--down); border-color: var(--down-dim); background: var(--down-dim); }
+  @media (max-width: 640px) { .explain-row-label { width: 100%; } }
+  .explain-block p { margin: 0; font-size: 12.5px; color: var(--ink-dim); line-height: 1.7; }
+
+  .two-col-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 820px) { .two-col-tables { grid-template-columns: 1fr; } }
+
+  footer.disclaimer-footer {
+    margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--ink-faint); text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="mark" style="background:#b45309;">測試</div>
+      <div class="name">Revision Lab · 研究測試版</div>
+    </div>
+    <div class="nav-pills">
+      <a href="index.html">市場溫度計</a>
+      <a href="strategy.html">策略回測（正式版）</a>
+      <a href="strategy-lab.html" class="active">研究測試版</a>
+    </div>
+    <div class="status-tag"><span class="dot"></span>行情至 <span id="updated-at" class="mono">—</span></div>
+    <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" title="切換淺色／深色">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
+
+  <div style="background:#b45309; color:#fff; font-weight:700; font-size:13px; text-align:center; padding:10px 16px; border-radius:10px; margin-bottom:14px;">
+    ⚠️ 這個頁面還在測試中，參數與機制尚未定案，數字僅供研究參考，不是正式對外版本。正式版請見「策略回測（正式版）」。
+  </div>
+
+  <div id="loading-banner" class="empty-state" style="padding:60px 20px;">正在連線資料庫與載入股價資料…</div>
+  <div id="error-banner" class="empty-state" style="display:none; padding:40px 20px; color:var(--down);">
+    資料讀取失敗，請重新整理頁面再試一次。<br/>
+    <span class="error-detail" style="font-size:11px; color:var(--ink-faint);"></span>
+  </div>
+
+  <div id="main-content" style="display:none;">
+
+    <div class="layout">
+      <div class="panel" id="param-panel">
+        <div class="eyebrow-row"><div class="step-num">01</div><span class="eyebrow">Strategy Inputs</span></div>
+        <div class="block-title">回測參數</div>
+
+        <fieldset>
+          <legend>回測期間</legend>
+          <div class="date-presets" id="date-presets">
+            <button type="button" data-preset="all">全部區間</button>
+            <button type="button" data-preset="train">訓練期 2023-2024</button>
+            <button type="button" data-preset="valid">驗證期 2025</button>
+            <button type="button" data-preset="test">測試期 2026至今</button>
+            <button type="button" data-preset="1y">近1年</button>
+          </div>
+          <div class="param-row2">
+            <div class="param-field">
+              <label>開始日期</label>
+              <div class="date-ymd">
+                <select id="p-start-y"></select>
+                <select id="p-start-m"></select>
+                <select id="p-start-d"></select>
+              </div>
+              <input type="hidden" id="p-start" value="2023-01-01"/>
+            </div>
+            <div class="param-field" style="margin-bottom:0;">
+              <label>結束日期</label>
+              <div class="date-ymd">
+                <select id="p-end-y"></select>
+                <select id="p-end-m"></select>
+                <select id="p-end-d"></select>
+              </div>
+              <input type="hidden" id="p-end" value="2026-12-31"/>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>訊號篩選門檻</legend>
+          <div class="param-row2">
+            <div class="param-field"><label>最低目標價調升幅度</label><div class="input-suffix"><input type="number" id="p-minUpgrade" value="0" step="0.5" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1" min="0"/><span class="suffix">位</span></div></div>
+          </div>
+          <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="0" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
+          <p class="hint" style="margin:8px 0 0;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>候選股票池</legend>
+          <div class="param-field" style="margin-bottom:0;">
+            <label>產業/主題篩選（可複選）</label>
+            <div class="multiselect" id="concept-multiselect">
+              <button type="button" class="multiselect-trigger" id="concept-trigger">不限（全部216檔）</button>
+              <div class="multiselect-panel" id="concept-panel"></div>
+            </div>
+            <p class="hint" style="margin:8px 0 0;">沿用「市場溫度計」既有的官方產業鏈/主題分類，可以同時勾選多個(例如半導體+通訊網路)，候選池取聯集，篩選門檻、評分、配置、出場邏輯完全不變。</p>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>配置與風控</legend>
+          <div class="param-row2">
+            <div class="param-field"><label>單檔最大權重</label><div class="input-suffix"><input type="number" id="p-maxWeight" value="20" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field"><label>投組總曝險上限</label><div class="input-suffix"><input type="number" id="p-maxExposure" value="100" step="5" min="1" max="100"/><span class="suffix">%</span></div></div>
+          </div>
+          <div class="param-row2">
+            <div class="param-field"><label>最長持有天數</label><div class="input-suffix"><input type="number" id="p-maxHold" value="10" step="5" min="0"/><span class="suffix">交易日</span></div></div>
+            <div class="param-field"><label>最大持股數</label><div class="input-suffix"><input type="number" id="p-maxPositions" value="5" step="1" min="0"/><span class="suffix">0=不限</span></div></div>
+          </div>
+          <div class="param-row2">
+            <div class="param-field"><label>單檔停損</label><div class="input-suffix"><input type="number" id="p-stopLoss" value="0" step="5" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+            <div class="param-field" style="margin-bottom:0;"><label>移動停損</label><div class="input-suffix"><input type="number" id="p-trailingStop" value="12" step="1" min="0" max="90"/><span class="suffix">%，0=不啟用</span></div></div>
+          </div>
+          <div class="param-row2">
+            <div class="param-field"><label>分批停利門檻（進場到目標價的%）</label><div class="input-suffix"><input type="number" id="p-partialTakeThreshold" value="70" step="10" min="0" max="100"/><span class="suffix">%</span></div></div>
+            <div class="param-field" style="margin-bottom:0;"><label>分批停利比例</label><div class="input-suffix"><input type="number" id="p-partialTakeFraction" value="30" step="10" min="0" max="100"/><span class="suffix">%，0=不啟用</span></div></div>
+          </div>
+
+          <div class="param-field" style="margin-bottom:0;">
+            <label>配置方式</label>
+            <select id="p-sizing">
+              <option value="equal">平均配置／等權配置</option>
+              <option value="by_upgrade">調升幅度加權</option>
+              <option value="composite">原始綜合分數</option>
+              <option value="enhanced" selected>第二代多因子分數（推薦）</option>
+            </select>
+          </div>
+
+          <details class="explainer-toggle">
+            <summary>配置方式怎麼計算？</summary>
+            <div class="explainer" style="margin-top:10px;">
+              <!-- 2026-07-29重寫：原本公式(S_i=R_i^α×A_i^β×U_i^γ這種)直接當第一行放最大最粗，
+                   是給電腦看的符號記法，人類使用者要先猜懂每個字母是什麼才看得懂。改成每個
+                   模型先講白話邏輯、配一個帶實際數字的範例，公式改成放在最後、字體縮小、當
+                   「技術參考」用，不是主要閱讀內容。 -->
+              <div class="model-explain">
+                <p class="model-name">① 平均配置／等權配置</p>
+                <p class="model-plain">不管訊號強弱，符合條件的股票一律平分資金。</p>
+                <p class="model-example">舉例：符合條件的有 5 檔股票 → 每檔都拿 <b>20%</b>。</p>
+                <p class="formula-ref">公式參考：S = 1，權重 = 1 ÷ 檔數</p>
+              </div>
+              <div class="model-explain">
+                <p class="model-name">② 調升幅度加權</p>
+                <p class="model-plain">這次目標價調升幅度越大，代表訊號越強，分到的資金也越多，跟調升百分比成正比。</p>
+                <p class="model-example">舉例：A股調升10%、B股調升5% → A拿 <b>10÷(10+5)=66.7%</b>，B拿 <b>33.3%</b>。</p>
+                <p class="formula-ref">公式參考：S = R，權重 = R ÷ 全部候選R加總（R=新目標價/舊目標價−1）</p>
+              </div>
+              <div class="model-explain">
+                <p class="model-name">③ 原始綜合分數</p>
+                <p class="model-plain">同時看「調升幅度」「分析師人數」「上漲空間」三個指標，乘在一起當分數；分析師人數開根號計算，讓人數增加仍加分，但避免大型權值股單靠分析師多就主導排名。</p>
+                <p class="model-example">舉例：調升10%、9位分析師、上漲空間20% → 分數 = <b>0.10 × √9 × 0.20 = 0.06</b>。</p>
+                <p class="formula-ref">公式參考：S = 調升幅度^α × 分析師數^β × 上漲空間^γ（預設 α=1, β=0.5, γ=1）</p>
+              </div>
+              <div class="model-explain" style="margin-bottom:0;">
+                <p class="model-name">④ 第二代多因子分數（推薦）</p>
+                <p class="model-plain">比③再多考慮兩件事：這次調升是不是比這檔股票「平常的調升幅度」誇張很多（異常調升，越異常分數越高）；這檔股票最近是不是已經在漲、跑贏大盤（相對動能，跑輸大盤會扣分）。同時用波動度打折——同樣訊號，優先選價格比較穩定的股票。</p>
+                <p class="model-example">五個因子（異常調升、分析師數、上漲空間、相對動能、連續上修）相乘，再除以波動率；任一項越有利，分數越高。</p>
+                <p class="formula-ref">公式參考：S = 異常調升 × ln(1+分析師) × 上漲空間 × 相對動能 × 連續上修 ÷ 波動率</p>
+              </div>
+              <p style="margin-top:10px; font-size:11px; color:var(--ink-faint);">四種模型分數轉權重的流程相同：篩選合格股票→依分數排序→(若設最大持股數)取前K檔→依分數比例分配初始權重→套用單檔上限，超過上限的固定在上限、剩餘資金依其他股票分數重新分配→股票太少湊不滿曝險上限時，剩餘保留現金。</p>
+            </div>
+          </details>
+
+          <div id="composite-params" style="display:none; margin-top:12px;">
+            <div class="param-row2">
+              <div class="param-field"><label>α 調升幅度</label><input type="number" id="p-alpha" value="1.0" step="0.1"/></div>
+              <div class="param-field"><label>β 分析師數</label><input type="number" id="p-beta" value="0.5" step="0.1"/></div>
+            </div>
+            <div class="param-field" style="margin-bottom:0;"><label>γ 上漲空間</label><input type="number" id="p-gamma" value="1.0" step="0.1"/></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>加碼規則</legend>
+          <div class="param-field"><label>歷史平均加碼規則</label>
+            <select id="p-avgRule">
+              <option value="none">不使用</option>
+              <option value="tier3">高於平均加碼 / 低於平均維持</option>
+            </select>
+          </div>
+          <div class="param-field" style="margin-bottom:0;"><label>加碼倍數</label><input type="number" id="p-avgBoost" value="1.5" step="0.1" min="1"/></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>出場規則</legend>
+          <div class="param-field checkbox"><input type="checkbox" id="p-exitDown" checked/><label>目標價調降時賣出</label></div>
+          <div class="param-field checkbox" style="margin-bottom:0;"><input type="checkbox" id="p-exitTarget" checked/><label>股價達目標價時賣出</label></div>
+          <p class="hint" style="margin:8px 0 0;">成交價格：固定用下一交易日開盤價進場，收盤後依固定資本做多退少補的重新平衡；不分新聞公布時間點。</p>
+        </fieldset>
+
+        <button class="btn block" id="run-btn"><span>▶</span>執行回測</button>
+
+        <p style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin:12px 0 0;">第一版僅使用同篇新聞直接揭露的新舊目標價，不納入EPS串聯紀錄；已計入0.3%證交稅(只算稅、不算手續費)，未計滑價。</p>
+      </div>
+
+      <div>
+        <nav class="quicknav">
+          <a href="#hero-section">總覽</a>
+          <a href="#chart-section">報酬曲線</a>
+          <a href="#stability-section">穩定度分析</a>
+          <a href="#optimizer-section">參數最佳化</a>
+          <a href="#explorer-section">歷史探索</a>
+          <a href="#ledger-section">每日帳本</a>
+          <a href="#methodology-section">方法論</a>
+        </nav>
+        <div id="hero-section">
+          <div id="card-row-holder"></div>
+          <div id="coverage-holder"></div>
+        </div>
+        <div id="chart-section">
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Arithmetic Return Curve</span></div>
+            <div class="block-title" style="margin-left:0;">每日報酬累加 vs. 大盤</div>
+            <div class="legend-row"><span><span class="sw" style="background:var(--up);"></span>我們的策略</span><span><span class="sw" style="background:var(--ink-faint);"></span>加權指數</span></div>
+            <div id="curve-holder"></div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Excess Return Curve</span></div>
+            <div class="block-title" style="margin-left:0;">超額報酬(策略累積 − 大盤累積)</div>
+            <div class="legend-row"><span><span class="sw" style="background:var(--accent);"></span>超額報酬</span></div>
+            <div id="excess-curve-holder"></div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="eyebrow-row"><span class="eyebrow">Rolling Walk-Forward Win Rate</span></div>
+            <div class="block-title" style="margin-left:0;">樣本外滾動勝率（12個月訓練 → 3個月驗證，逐段滾動）</div>
+            <p class="hint" style="margin:2px 0 10px;">跟上面兩張圖不同——上面是「同一組參數套用全期間」的單一結果，這裡是把全期間切成好幾段獨立的樣本外驗證（每段都只用前12個月資料訓練、驗證接下來3個月沒看過的資料），比較不容易被單一區間的運氣影響，是目前對「這組參數到底穩不穩」最誠實的檢驗。</p>
+            <div id="rolling-summary-holder"></div>
+            <div id="rolling-chart-holder"></div>
+          </div>
+        </div>
+
+        <!-- ===== PARAMETER STABILITY ===== -->
+        <section class="section-card accent-caution" id="stability-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Parameter Stability</span><h3>參數穩定度分析</h3></div>
+            <button class="btn caution small" id="sensitivity-btn">執行敏感度分析</button>
+          </div>
+          <p class="section-sub">固定目前左側面板的參數與配置方式，逐一單獨變動6個參數(其餘維持目前設定值)，檢視超額報酬對每個參數的敏感度——鄰近設定落差越大，代表目前這個設定越可能是局部尖峰，過擬合風險越高。</p>
+          <div id="sensitivity-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始分析(約需數秒到數十秒，依資料量而定)。</div></div>
+        </section>
+
+        <!-- ===== OUT-OF-SAMPLE OPTIMIZATION ===== -->
+        <section class="section-card accent-safe" id="optimizer-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Parameter Optimization</span><h3>參數自動最佳化</h3></div>
+            <button class="btn safe small" id="strict-search-btn">重新執行搜尋</button>
+          </div>
+          <p class="section-sub" id="optimizer-mode-desc">384組候選(涵蓋全部4種配置方式)：2023訓練→2024驗證，再以2023–2024訓練→2025驗證，兩次驗證綜合選定；2026保留測試不參與選參數。</p>
+          <div id="strict-result"><div class="empty-state" style="padding:20px;">尚未執行，點右上角按鈕開始搜尋。</div></div>
+
+          <!-- 2026-07-29：原本「歷史最佳策略探索」是獨立的一整張卡片，跟上面這張外觀太像
+               (都是標題+按鈕+搜尋結果)，容易被誤會是同一個功能做兩次。這兩者其實回答不同
+               問題(這張卡片是「有做訓練/驗證分段、防止過度配適」的正式搜尋；下面這個是
+               「歷史事後最高報酬長怎樣」的天花板參考，沒有分段驗證、不建議直接採用)，
+               保留功能但改成收合在同一張卡片底下的次要區塊，不再是平起平坐的兩張卡片。 -->
+          <details class="table-toggle" id="explorer-section" style="margin-top:18px; border-top:1px solid var(--border); padding-top:14px;">
+            <summary style="font-size:13px;">進階參考：歷史事後最高報酬搜尋（無訓練/驗證分段，僅供對照天花板，不建議直接採用）</summary>
+            <div style="margin-top:12px;">
+              <div class="section-head">
+                <div><span class="eyebrow">Historical Ceiling Reference</span><h3 style="font-size:14px;">歷史最佳策略探索</h3></div>
+                <button class="btn caution small" id="explore-search-btn">載入歷史搜尋結果</button>
+              </div>
+              <p class="section-sub">336組候選(固定網格)，直接搜尋 2023 至今事後報酬最高的參數組合，沒有訓練/驗證分段——只能回答「歷史上曾經存在過這麼好的組合」，不能證明未來有效，數字通常會比上面「參數自動最佳化」樂觀。</p>
+              <div id="explore-result"><div class="empty-state" style="padding:20px;">尚未執行，點按鈕開始搜尋。</div></div>
+            </div>
+          </details>
+        </section>
+
+        <!-- ===== DAILY LEDGER ===== -->
+        <section class="section-card" id="ledger-section" style="display:none;">
+          <div class="section-head">
+            <div><span class="eyebrow">Daily Ledger</span><h3>每日資金、持股與買賣</h3></div>
+          </div>
+          <div class="ledger-controls">
+            <label>交易日期</label>
+            <select id="ledger-date-select" class="mono"></select>
+            <button class="btn secondary small" id="ledger-latest-btn">跳到最新交易日</button>
+            <button class="btn secondary small" id="ledger-csv-btn">匯出每日 CSV</button>
+          </div>
+          <div class="capital-row">
+            <div class="param-field"><label>實際執行資金（元）</label><input type="number" id="p-capital" value="100000000" step="1000000"/></div>
+          </div>
+          <div id="ledger-detail"></div>
+        </section>
+
+        <!-- ===== PER-TICKER TRACK RECORD ===== -->
+        <section class="section-card" id="track-record-section" style="display:none;">
+          <div class="section-head">
+            <div><span class="eyebrow">Per-Ticker Track Record</span><h3>個股歷史表現</h3></div>
+          </div>
+          <p class="section-sub">全部股票共用左側同一組參數(不是逐檔各自找最佳參數)——如果之後想投資某一檔股票，這裡顯示的是「用我們驗證過的參數，這檔股票過去實際觸發過幾次訊號、表現如何」，不是重新幫這檔股票量身優化，避免單一股票樣本數太少(常常只有個位數次)反而overfitting。樣本數低於3次的會淡化顯示，僅供參考。</p>
+          <div class="filter-bar" style="margin-bottom:10px;">
+            <span class="filter-group-label">排序</span>
+            <select id="track-sort-select" class="sort-select">
+              <option value="count">交易次數</option>
+              <option value="winRate">勝率</option>
+              <option value="avgReturn">平均報酬</option>
+              <option value="avgHoldDays">平均持有天數</option>
+            </select>
+          </div>
+          <div id="track-record-holder"></div>
+        </section>
+
+        <div class="panel explainer" style="margin-bottom:0;" id="methodology-section">
+          <div class="eyebrow-row"><span class="eyebrow">Methodology Notes</span></div>
+          <p style="margin-top:10px;">會計方法採<b>每日固定資本平帳</b>：每天以本金100為基準結算，獲利抽回、虧損補入，隔日重新以100開始——權重不會因為股價變動而在日與日之間複利累加。策略與大盤都用「每日報酬率算術加總」呈現累積報酬，避免點位複利與報酬率相加口徑不一致導致的超額報酬計算錯誤。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="disclaimer-footer">
+    回測聲明：本工具用於研究公開新聞訊號，不構成投資建議。已計入賣出0.3%證交稅，未計手續費、滑價與成交量限制；歷史最佳參數不代表未來績效。
+  </footer>
+</div>
+
+<div class="chart-tooltip" id="tooltip"></div>
+
+<script>
+// ============================================================================
+// 資料載入
+// ============================================================================
+const SUPABASE_URL = 'https://kiiwaojcetxmeycyupvn.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtpaXdhb2pjZXR4bWV5Y3l1cHZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1Mjk2NzAsImV4cCI6MjEwMDEwNTY3MH0.QPnEenJ8OtgWm1q3zhstinsAzXJAD6bunPp6JhrL4PU';
+const SB_HEADERS = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` };
+
+async function sbFetch(path, params) {
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url, { headers: SB_HEADERS });
+  if (!res.ok) throw new Error(`Supabase查詢失敗 (${path}): ${res.status}`);
+  return res.json();
+}
+
+// v_unified_target_events UP+DOWN共約5700+筆，超過單次5000上限，分頁抓取
+async function sbFetchAll(path, params) {
+  let out = [], offset = 0;
+  const pageSize = 5000;
+  while (true) {
+    const page = await sbFetch(path, { ...params, offset: String(offset), limit: String(pageSize) });
+    out = out.concat(page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return out;
+}
+
+let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [], TAIEX_OPEN = [];
+let TAIEX_RET = [];
+let EV_UP = [], DOWN_BY_DATE = new Map();
+let RAW_UP_COUNT = 0;
+let RAW_EVENTS = []; // 優化器算分段(訓練/驗證/測試)時要重建floorIdx版的EV_UP，見buildFoldEvUp()
+const FOLD_EV_UP_CACHE = new Map();
+// 2026-07-28新增：每檔股票自己的、依日期排序、沒有NaN空缺的原始收盤價序列(不對齊大盤
+// 交易日曆)，只給動能/波動率回看窗口用，Map<ticker, {dates:[...], closes:[...]}>。
+let PRICES_RAW = new Map();
+// 2026-07-29新增：市場溫度計網站既有的concept_map分類，concept名稱 -> Set(ticker)。
+let CONCEPT_TICKERS = new Map();
+// 2026-07-29新增：股票代號 -> 中文公司名稱，讓帳本/持股/買賣表不再只顯示代號。
+let TICKER_NAMES = new Map();
+function tickerLabel(t) {
+  const name = TICKER_NAMES.get(t);
+  return name ? `${t} ${name}` : t;
+}
+
+// 2026-07-28新增：同事的新聞/股價資料庫本來就從2023-01-03才開始(FactSet/鉅亨網的樣本
+// 起點)，我們自己的stock_prices因為另外回補過2021年至今的歷史，回看窗口在資料最早期
+// (2023年1月)會比他湊得到更多天數，算出來的動能/波動率因此對不上——這段2021-2022的
+// 歷史對這個策略沒有實質意義(反正也沒有新聞訊號可以回測)，用戶決定跟同事版本對齊，
+// 回看窗口的下限鎖在跟他資料一樣的起點，不使用更早的歷史。
+const DATA_FLOOR_DATE = '2023-01-03';
+
+// 每檔股票各自往前找「執行日之前最近n個有效收盤價」，不受大盤交易日曆限制——對照同事
+// backtest.js的priorSeries()。dates/closes依日期字串(YYYY-MM-DD)排序，字串比較順序
+// 跟日期先後順序一致，可以直接用來二分搜尋。
+function rawPriorWindow(ticker, beforeDateStr, n) {
+  const series = PRICES_RAW.get(ticker);
+  if (!series || series.dates.length === 0) return [];
+  const dates = series.dates, closes = series.closes;
+  let lo = 0, hi = dates.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] < beforeDateStr) lo = mid + 1; else hi = mid;
+  }
+  let floorIdx = 0, fhi = dates.length;
+  while (floorIdx < fhi) {
+    const mid = (floorIdx + fhi) >> 1;
+    if (dates[mid] < DATA_FLOOR_DATE) floorIdx = mid + 1; else fhi = mid;
+  }
+  return closes.slice(Math.max(floorIdx, lo - n), lo);
+}
+
+function bisectRight(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= x) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+function bisectLeft(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < x) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+function nextTradingDayIdx(dateStr) {
+  const pos = bisectRight(DATES, dateStr);
+  return pos >= DATES.length ? null : pos;
+}
+function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+function stdSample(arr) {
+  const m = mean(arr);
+  const v = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / (arr.length - 1);
+  return Math.sqrt(v);
+}
+// 中位數，跳過null/undefined(對照pandas .median()預設skipna=True)
+function medianSkipNull(arr) {
+  const vals = arr.filter(v => v != null).slice().sort((a, b) => a - b);
+  if (vals.length === 0) return null;
+  const mid = Math.floor(vals.length / 2);
+  return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+}
+
+// 執行時間窗口規則：交易日以「09:00開盤」當分界，不是午夜——新聞在當天09:00以前公布，
+// 當天開盤還來得及反應，用當天開盤價；09:00以後公布(或公布在非交易日)，最早只能等
+// 下一個交易日開盤。這樣盤前新聞不會被多耽誤一整天，跟實際交易員能做到的一致。
+function resolveExecutionIdx(dateStr, timeStr) {
+  if (timeStr != null && timeStr < '09:00:00') {
+    const idx = dateIdxMap.get(dateStr);
+    if (idx != null) return idx;
+  }
+  return nextTradingDayIdx(dateStr);
+}
+
+// 2026-07-29新增：內容重複去重(對照同事articles表的duplicate_signature/duplicate_rank
+// 欄位)——同一檔股票、同一天，同一篇新聞被系統重複發布兩次(例如08:10跟10:10各發一篇、
+// old_target/new_target/analyst_count完全相同)，是資料源本身的重複，不是兩則獨立訊號。
+// 這個問題dedupeByExecutionWindow(用執行窗口idx當key)抓不到——因為09:00是分界點，
+// 08:10發布的算當天執行、10:10發布的算隔天執行，兩篇重複新聞剛好落在不同執行窗口，
+// 於是被當成兩個獨立的合格候選：entryIdx先被第一篇設到「當天」，馬上又被第二篇(其實
+// 是同一則新聞的重複發布)蓋成「隔天」，導致這檔股票的持有天數少算一天，maxHoldDays
+// 出場時間也跟著晚一天——單一個股1天的差異，經過maxHoldDays週期性出場/進場的排名
+// 資格競爭一路累積下去，是驗證期/測試期超額報酬跟同事對不齊的根因(訓練期0.32pp、
+// 驗證期1.43pp、測試期2.42pp的落差正好隨時間累積放大，指向這種會複利的單點分歧，
+// 不是隨機雜訊)。我們自己的Supabase資料庫沒有同事那套duplicate_signature欄位，
+// 這裡用內容特徵(股票+日期+方向+舊目標價+新目標價+分析師數)重建同樣的去重邏輯：
+// 同一組特徵只留發布時間最早的一篇，其餘視為重複新聞直接丟棄(不進任何後續流程)。
+function dedupeByContentSignature(events) {
+  const groups = new Map();
+  for (const e of events) {
+    const key = `${e.ticker}|${e.date}|${e.direction}|${e.prev_target}|${e.new_target}|${e.analyst_count}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  const out = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) { out.push(group[0]); continue; }
+    const earliest = group.slice().sort((a, b) => (a.news_time_taipei || '99:99:99').localeCompare(b.news_time_taipei || '99:99:99'))[0];
+    out.push(earliest);
+  }
+  return out;
+}
+
+// 2026-07-28新增：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行時間
+// 窗口，不管UP還是DOWN，只留發布時間最晚的那篇。原本UP/DOWN是兩條獨立處理的資料流
+// (UP進prepareEvents決定進場候選、DOWN進buildDownByDate決定出場)，完全沒有互相去重——
+// 如果同一檔股票同一個執行窗口裡「先有一篇UP、後有一篇DOWN」，同事的引擎會讓時間較晚的
+// DOWN直接蓋掉UP(UP從未成為候選)，我們原本兩條資料流互不知情，UP還是會被當成候選處理，
+// 導致明明應該被蓋掉的進場訊號還是進了場。這裡在UP/DOWN分流之前，先合併去重一次。
+function dedupeByExecutionWindow(events, floorIdx) {
+  const withIdx = events.map(e => {
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    return idx == null ? null : { ...e, _execIdx: floorIdx != null ? Math.max(idx, floorIdx) : idx };
+  }).filter(e => e != null);
+  const sorted = withIdx.slice().sort((a, b) => {
+    const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
+    const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
+    return ta.localeCompare(tb);
+  });
+  const latestByWindow = new Map();
+  for (const e of sorted) latestByWindow.set(`${e.ticker}|${e._execIdx}`, e);
+  return [...latestByWindow.values()];
+}
+
+// 異常調升/連續調升次數：對照同事backtest.js的makeEvents()，用「全部方向」(UP+DOWN)
+// 的歷史事件依發布時間排序算基準值——abnormalRevision(相對該股過去365天|調升幅度|
+// 中位數)、recentUpgrades60(過去60天內調升次數+1)。回傳Map，key='ticker|date'。
+function computeRevisionHistory(events, floorIdx) {
+  // 2026-07-28修正：對照同事backtest.js的latestByWindow——同一檔股票、同一個09:00執行
+  // 時間窗口如果有兩篇以上獨立新聞(各自都通過他資料庫自己的查重判定、不算彼此重複)，
+  // 同事的引擎先去重成「只留發布時間最晚的那篇」，才拿這份已去重的新聞流去算歷史因子。
+  // 原本這裡是拿還沒去重的原始新聞流去算，導致被丟棄的重複新聞還是被算進「過去調升次數」
+  // 統計裡，把recentUpgrades60灌水；早期資料量少時這個灌水的影響被放大，是訓練期超額
+  // 報酬比同事官方數字低一截的根因之一。
+  //
+  // 2026-07-28再修正(floorIdx)：對照同事backtest.js的executionDateForPublishedAt()——
+  // 用二分搜尋在「歷史交易日曆」裡找執行日，這份曆表在他評估某一段訓練/驗證/測試期時
+  // 只回溯該段起始日往前140天(不是全部歷史，見optimizer.js的loadData())。文章發布時間
+  // 如果早於這個140天緩衝的第一天，二分搜尋會直接收斂到「曆表第一天」，不是被丟棄或
+  // 回傳null——這代表所有緩衝之前發布的舊文章，全部會被誤判成「跟緩衝第一天同一個執行
+  // 窗口」，彼此互相碰撞，同一檔股票只留「發布時間最晚」的一篇存活(用它真正的發布日期
+  // 進365天歷史基準的計算，不是曆表第一天)，其他更舊的全部被蓋掉消失。floorIdx就是
+  // 這裡用來重現這個「二分搜尋鎖底」行為的機制：任何解析出來的執行窗口index，只要小於
+  // floorIdx，一律鎖到floorIdx本身，讓這些舊文章互相碰撞、只留最晚發布的一篇。
+  const withExecIdx = events.map(e => {
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    return idx == null ? null : { ...e, _execIdx: floorIdx != null ? Math.max(idx, floorIdx) : idx };
+  }).filter(e => e != null);
+  const sortedByPublish = withExecIdx.slice().sort((a, b) => {
+    const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
+    const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
+    return ta.localeCompare(tb);
+  });
+  const latestByWindow = new Map();
+  for (const e of sortedByPublish) latestByWindow.set(`${e.ticker}|${e._execIdx}`, e);
+  const all = [...latestByWindow.values()].sort((a, b) => {
+    const ta = a.date + ' ' + (a.news_time_taipei || '00:00:00');
+    const tb = b.date + ' ' + (b.news_time_taipei || '00:00:00');
+    return ta.localeCompare(tb);
+  });
+  // 2026-07-28修正：out原本用`${ticker}|${pubDate}`(只到日期)當key——如果同一檔股票同一天
+  // 發布兩篇「執行窗口不同」的獨立新聞(例如一篇09:00前發布當天執行、另一篇09:00後發布隔天
+  // 執行，兩篇都合法存活過跨方向去重)，這兩篇的pubDate字串剛好相同，key就會撞在一起，
+  // 後處理的那篇會把前一篇算好的abnormalRevision/recentUpgrades60直接覆蓋掉。改用
+  // `${ticker}|${執行窗口idx}`當key——這正是latestByWindow保證彼此不重複的欄位，不會再撞。
+  const priorRevisions = new Map(); // ticker -> [{date, absValue}]
+  const priorUpgrades = new Map();  // ticker -> [date]
+  const out = new Map();
+  const dayMs = 86400000;
+  for (const e of all) {
+    const ticker = e.ticker, pubDate = e.date;
+    const revs = priorRevisions.get(ticker) || [];
+    const cutoff365 = new Date(Date.parse(pubDate + 'T00:00:00Z') - 365 * dayMs).toISOString().slice(0, 10);
+    const baseVals = revs.filter(r => r.date < pubDate && r.date >= cutoff365).map(r => r.absValue);
+    const base = medianSkipNull(baseVals);
+    const revisionDecimal = Number(e.target_change_pct) / 100;
+    const abnormalRevision = base ? Math.abs(revisionDecimal) / base : 1.0;
+
+    const ups = priorUpgrades.get(ticker) || [];
+    const cutoff60 = new Date(Date.parse(pubDate + 'T00:00:00Z') - 60 * dayMs).toISOString().slice(0, 10);
+    const recentUpgrades60 = 1 + ups.filter(d => d < pubDate && d >= cutoff60).length;
+
+    out.set(`${ticker}|${e._execIdx}`, { abnormalRevision, recentUpgrades60 });
+
+    revs.push({ date: pubDate, absValue: Math.abs(revisionDecimal) });
+    priorRevisions.set(ticker, revs);
+    if (e.direction === 'UP') { ups.push(pubDate); priorUpgrades.set(ticker, ups); }
+  }
+  return out;
+}
+
+// 進場成交規則(唯一策略)：不分收盤/開盤版本，一律用執行日的「開盤價」進場——
+// 一天只在開盤時買進一次，收盤後再依固定資本(例如10,000,000)做多退少補的重新平衡。
+// floorIdx只給優化器算分段(訓練/驗證/測試)時用，複製同事140天緩衝的「二分搜尋鎖底」
+// 行為(見computeRevisionHistory的說明)；平常主回測/探索器不傳這個參數，行為不變。
+function prepareEvents(events, floorIdx) {
+  const revisionHistory = computeRevisionHistory(events, floorIdx);
+  // 先跨UP/DOWN方向去重(同一檔股票同一個執行窗口只留發布時間最晚的那篇)，避免明明應該
+  // 被較晚的DOWN蓋掉的UP訊號，因為UP/DOWN分開處理而漏網、還是被當成候選進場。加入
+  // news_time_taipei當第三層排序鍵，"keep last"才會穩定挑到當天發布時間最晚的那篇。
+  const deduped = dedupeByExecutionWindow(events, floorIdx);
+  const up = deduped.filter(e => e.direction === 'UP')
+    .slice()
+    .sort((a, b) => {
+      if (a.ticker !== b.ticker) return a.ticker.localeCompare(b.ticker);
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return (a.news_time_taipei || '').localeCompare(b.news_time_taipei || '');
+    });
+  const histByTicker = new Map();
+  const out = [];
+  for (const e of up) {
+    const entryIdx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    if (entryIdx == null) continue;
+    const priceArr = PRICES[e.ticker];
+    if (!priceArr) continue;
+    const openArr = PRICES_OPEN[e.ticker];
+    const entryPrice = openArr ? openArr[entryIdx] : null;
+    if (entryPrice == null) continue;
+    // 上漲空間用進場前一天的收盤價(訊號還沒反應前的最後一個已知價格)當基準，
+    // 不用進場價本身——進場價已經反映了訊號公布後市場的反應，拿它當分母會低估真正的上漲空間。
+    const prevClose = entryIdx > 0 ? priceArr[entryIdx - 1] : null;
+
+    if (!histByTicker.has(e.ticker)) histByTicker.set(e.ticker, []);
+    const hist = histByTicker.get(e.ticker);
+    const n = hist.length;
+    let histAvgChange = null, histAvgAnalyst = null, histStdChange = null;
+    if (n > 0) {
+      histAvgChange = mean(hist.map(h => h.change));
+      histAvgAnalyst = mean(hist.map(h => h.analyst));
+      histStdChange = n > 1 ? stdSample(hist.map(h => h.change)) : null;
+    }
+    const changeVal = Number(e.target_change_pct);
+    const analystVal = Number(e.analyst_count);
+    const newTarget = Number(e.new_target);
+    const upsidePrice = prevClose != null ? (newTarget - prevClose) / prevClose : null;
+
+    // enhanced配置公式(對照同事版本)要用的動能/波動率：進場前21個價格點(20個報酬)，
+    // 頭尾比當動能，相對加權指數算相對動能，同一段期間的日報酬年化標準差當波動率。
+    // 2026-07-28修正：對照同事backtest.js的priorSeries()——回看窗口是「這檔股票自己的
+    // 價格紀錄裡，執行日之前最近21個有效收盤價」，不受大盤交易日曆限制。個股偶爾會有
+    // 大盤加權指數當天沒有報價、但個股自己有報價的日子，這種日子如果用「對齊大盤日曆的
+    // PRICES陣列」去切窗口，會被整筆跳過，回看窗口因此少算一天、往前多推一天，動能/
+    // 波動率算出來就會跟同事版本對不上。改用rawPriorWindow()——每檔股票自己排序、
+    // 沒有NaN空缺的原始序列，不受大盤日曆限制。
+    let momentum20 = 0, relativeMomentum20 = 0, volatility20 = 0.35;
+    // 大盤動能窗口下限也要對齊DATA_FLOOR_DATE，理由同rawPriorWindow——我們的TAIEX資料回溯
+    // 到2021年，同事的benchmarkMap只從2023-01-03開始，不鎖下限的話早期訊號的相對動能會
+    // 對不上他的版本。
+    const floorIdx = dateIdxMap.get(DATA_FLOOR_DATE) ?? 0;
+    const windowStart = Math.max(floorIdx, entryIdx - 21);
+    const priceWindow = rawPriorWindow(e.ticker, DATES[entryIdx], 21);
+    const taiexWindow = TAIEX.slice(windowStart, entryIdx).filter(v => v != null);
+    if (priceWindow.length > 1) {
+      momentum20 = priceWindow[priceWindow.length - 1] / priceWindow[0] - 1;
+      const rets = [];
+      for (let k = 1; k < priceWindow.length; k++) rets.push(priceWindow[k] / priceWindow[k - 1] - 1);
+      if (rets.length > 1) volatility20 = stdSample(rets) * Math.sqrt(252);
+    }
+    if (taiexWindow.length > 1) {
+      const benchRet = taiexWindow[taiexWindow.length - 1] / taiexWindow[0] - 1;
+      relativeMomentum20 = momentum20 - benchRet;
+    }
+    const revHist = revisionHistory.get(`${e.ticker}|${entryIdx}`) || { abnormalRevision: 1.0, recentUpgrades60: 1 };
+
+    out.push({
+      ticker: e.ticker, date: e.date, entryIdx, entryDate: DATES[entryIdx],
+      entryPrice, newTarget, referenceClose: prevClose,
+      targetChangePct: changeVal, analystCount: analystVal,
+      upsidePrice, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
+      abnormalRevision: revHist.abnormalRevision, recentUpgrades60: revHist.recentUpgrades60,
+      momentum20, relativeMomentum20, volatility20,
+    });
+    hist.push({ change: changeVal, analyst: analystVal });
+  }
+  return out;
+}
+
+// 2026-07-28：優化器評估「訓練/驗證/測試」某一段的表現時，用這個函式重建一份floorIdx
+// 版的EV_UP，複製同事optimizer.js loadData()的140天緩衝行為(見computeRevisionHistory
+// 的詳細說明)。同一個foldStartDate只算一次(快取)，不是每個candidate各算一次。
+function buildFoldEvUp(foldStartDate) {
+  if (FOLD_EV_UP_CACHE.has(foldStartDate)) return FOLD_EV_UP_CACHE.get(foldStartDate);
+  const floorDateStr = new Date(new Date(foldStartDate + 'T00:00:00Z').getTime() - 140 * 86400000).toISOString().slice(0, 10);
+  const floorIdx = bisectLeft(DATES, floorDateStr);
+  const result = prepareEvents(RAW_EVENTS, floorIdx);
+  FOLD_EV_UP_CACHE.set(foldStartDate, result);
+  return result;
+}
+
+function buildDownByDate(events) {
+  // 跟進場邏輯用同一份跨UP/DOWN方向去重過的事件流，才會跟prepareEvents對同一個
+  // (ticker,執行窗口)判斷出同樣的贏家，不會兩邊各自漏判。
+  const deduped = dedupeByExecutionWindow(events);
+  const map = new Map();
+  deduped.filter(e => e.direction === 'DOWN').forEach(e => {
+    const idx = resolveExecutionIdx(e.date, e.news_time_taipei);
+    if (idx == null) return;
+    if (!map.has(idx)) map.set(idx, new Set());
+    map.get(idx).add(e.ticker);
+  });
+  return map;
+}
+
+async function loadAll() {
+  // 2026-07-28：計算方法論已驗證跟同事版本0天分歧(見git log)，資料源切回我們自己的
+  // 正式表(v_unified_target_events/get_strategy_price_bundle/stock_prices)，這樣網站
+  // 才能吃到daily_update.py(07:00新聞)+update_stock_prices.py(15:00股價)每天自動更新
+  // 的資料，不再依賴同事重寄靜態快照。colleague_*表只在方法論驗證階段用過，還留在
+  // Supabase上供之後需要交叉核對時使用，不影響正式網站。
+  const events = await sbFetchAll('v_unified_target_events', {
+    select: 'ticker,date,direction,prev_target,new_target,target_change_pct,analyst_count,news_time_taipei,company',
+    direction: 'in.(UP,DOWN)',
+    order: 'date.asc,id.asc',
+  });
+
+  const bundleUrl = new URL(`${SUPABASE_URL}/rest/v1/rpc/get_strategy_price_bundle`);
+  const bundleRes = await fetch(bundleUrl, { method: 'POST', headers: { ...SB_HEADERS, 'Content-Type': 'application/json' }, body: '{}' });
+  if (!bundleRes.ok) throw new Error(`股價資料RPC讀取失敗: ${bundleRes.status}`);
+  const bundle = await bundleRes.json();
+
+  DATES = bundle.dates;
+  dateIdxMap = new Map(DATES.map((d, i) => [d, i]));
+  PRICES = bundle.tickers_close || bundle.tickers || {};
+  PRICES_OPEN = bundle.tickers_open || {};
+  TAIEX = bundle.taiex_close;
+  TAIEX_OPEN = bundle.taiex_open || [];
+
+  TAIEX_RET = new Array(TAIEX.length).fill(null);
+  for (let i = 1; i < TAIEX.length; i++) {
+    if (TAIEX[i] != null && TAIEX[i - 1] != null && TAIEX[i - 1] !== 0) TAIEX_RET[i] = (TAIEX[i] - TAIEX[i - 1]) / TAIEX[i - 1];
+  }
+
+  // 2026-07-28新增：直接查stock_prices原始表，不透過get_strategy_price_bundle()這種
+  // 「先跟大盤交易日曆對齊、對不上的日期直接丟掉」的RPC，動能/波動率回看窗口才能
+  // 正確涵蓋個股自己獨有(大盤那天剛好沒報價)的交易日。對照strategy_backtest.py的
+  // _fetch_raw_stock_prices()。
+  const rawPriceRows = await sbFetchAll('stock_prices', {
+    select: 'ticker,date,close', order: 'ticker.asc,date.asc',
+  });
+  PRICES_RAW = new Map();
+  for (const row of rawPriceRows) {
+    if (row.close == null) continue;
+    if (!PRICES_RAW.has(row.ticker)) PRICES_RAW.set(row.ticker, { dates: [], closes: [] });
+    const s = PRICES_RAW.get(row.ticker);
+    s.dates.push(row.date);
+    s.closes.push(row.close);
+  }
+
+  const dedupedEvents = dedupeByContentSignature(events);
+  RAW_EVENTS = dedupedEvents;
+  EV_UP = prepareEvents(dedupedEvents);
+  DOWN_BY_DATE = buildDownByDate(dedupedEvents);
+  // 2026-07-29修正：「無法配對事件」曾經算出負數——原本RAW_UP_COUNT是prepareEvents()
+  // 內部順手覆蓋的全域變數，但優化器/穩定度分析為了算訓練/驗證/測試分段，會另外呼叫
+  // 好幾十次prepareEvents(RAW_EVENTS, floorIdx)，每次都把這個全域變數覆蓋成「那個分段」
+  // 的事件數(通常比全期間少很多)。只要優化器跑完之後畫面又重繪一次涵蓋度區塊(現在
+  // 優化器跑完會自動同步回主畫面，就會發生這個情況)，讀到的就是被分段運算污染過的
+  // 舊數字，比EV_UP.length還小，兩者相減就變成負數。改成不靠side effect，直接在這裡
+  // 用主資料集(未分段)重新算一次「跨方向去重後的UP事件數」，只在loadAll()執行一次，
+  // 不會再被其他地方的prepareEvents()呼叫污染。
+  RAW_UP_COUNT = dedupeByExecutionWindow(dedupedEvents).filter(e => e.direction === 'UP').length;
+
+  // 2026-07-29新增：沿用市場溫度計網站既有的concept_map分類(46個官方產業鏈+3個主題)，
+  // 不是重新發明一套分類——讓使用者可以直接篩選「只看某個產業/主題」的候選股票池，
+  // 其他篩選/評分/配置/出場邏輯完全不變，只是候選池變小。
+  // 2026-07-29修正：concept名稱在不同dimension可能重複(例如「半導體」同時是官方產業鏈
+  // 分類、也是主題分類，兩邊收錄的股票不一定一樣)——原本直接用concept名稱當key，會把
+  // 兩個不同dimension、剛好同名的分類靜默合併成一個集合，下拉選單也會出現兩個一模一樣
+  // 的「半導體」選項，選哪個都套用同一份合併後的清單，使用者完全看不出來。改用
+  // `${dimension}::${concept}` 當key，兩個「半導體」各自獨立，不會互相污染。
+  const conceptRows = await sbFetchAll('concept_map', { select: 'ticker,concept,dimension,company_name' });
+  CONCEPT_TICKERS = new Map(); // "dimension::concept" -> Set(ticker)
+  const conceptsByDim = new Map(); // dimension -> Set(concept)
+  for (const row of conceptRows) {
+    const key = `${row.dimension}::${row.concept}`;
+    if (!CONCEPT_TICKERS.has(key)) CONCEPT_TICKERS.set(key, new Set());
+    CONCEPT_TICKERS.get(key).add(row.ticker);
+    if (!conceptsByDim.has(row.dimension)) conceptsByDim.set(row.dimension, new Set());
+    conceptsByDim.get(row.dimension).add(row.concept);
+    if (row.company_name && !TICKER_NAMES.has(row.ticker)) TICKER_NAMES.set(row.ticker, row.company_name);
+  }
+  // concept_map覆蓋216檔中的大部分，但不保證100%——用events自己帶的company欄位補漏，
+  // 兩邊來源都沒有的股票，顯示上就退回只顯示代號，不會整頁報錯。
+  for (const e of events) {
+    if (e.company && !TICKER_NAMES.has(e.ticker)) TICKER_NAMES.set(e.ticker, e.company);
+  }
+  populateConceptSelect(conceptsByDim);
+
+  document.getElementById('updated-at').textContent = DATES[DATES.length - 1];
+}
+
+// ============================================================================
+// 回測引擎 — 逐函式對照 strategy_backtest.py
+// ============================================================================
+
+// 2026-07-28修正：原本直接把沒通過門檻的事件整批丟掉，但同事backtest.js的applyEvents()
+// 對「沒通過門檻、但這檔股票已經持有中」的事件不是整篇忽略——會把目標價/分析師數更新到
+// 既有部位上(entryIndex跟分數不變，不算重新進場)，只有「沒通過門檻、且這檔股票目前沒
+// 持有」才會真的整篇忽略。改成保留所有有效價格資料的事件、加一個qualifies欄位，篩選
+// 判斷留到runBacktest的逐日迴圈依「這檔股票今天在不在active裡」分流處理。
+function filterCandidates(cands, p) {
+  // 2026-07-29新增：候選股票池篩選(產業/主題，可複選)——限制在concept_map裡屬於「任一」
+  // 選定分類的股票才會被當成候選(取聯集，例如同時勾選半導體+通訊網路，兩邊的股票都算
+  // 候選)，不在清單內的股票從一開始就不會進場，其他篩選/評分/配置/出場邏輯完全不變。
+  // conceptFilters為空陣列(不限)時直接跳過，行為不變。
+  let conceptTickers = null;
+  if (p.conceptFilters && p.conceptFilters.length) {
+    conceptTickers = new Set();
+    for (const key of p.conceptFilters) {
+      const s = CONCEPT_TICKERS.get(key);
+      if (s) for (const t of s) conceptTickers.add(t);
+    }
+  }
+  return cands
+    .filter(c => c.entryPrice != null && c.upsidePrice != null)
+    .filter(c => !conceptTickers || conceptTickers.has(c.ticker))
+    .map(c => ({
+      ...c,
+      upsideUsed: c.upsidePrice,
+      entryPriceUsed: c.entryPrice,
+      qualifies: c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside,
+    }));
+}
+
+// 直接對照同事backtest.js的signalScore()『enhanced』分支，逐項複製，不是重新設計。
+function scoreEnhanced(c) {
+  // 2026-07-28修正：對照同事backtest.js的`event.abnormalRevision||1`，改用||不是??——JS的
+  // ||對0是falsy，這是他HANDOVER.md自己記錄的已知瑕疵(「abnormalRevision=0目前會因缺值
+  // 保護被當成1」)，但這是他小主管已經審過、寫進正式參數的行為，我們要複製這個瑕疵才能
+  // 跟他的數字對上，不能自己「修正」成更合理但跟他不一致的版本(原本用??會讓abnormalRevision
+  // 剛好是0.0的候選被clip到0.25，score比他低了4倍，足以讓候選排不進前5名)。
+  const surprise = Math.min(4, Math.max(0.25, c.abnormalRevision || 1));
+  const analysts = Math.log1p(c.analystCount);
+  const upside = Math.min(0.60, Math.max(0.01, c.upsideUsed));
+  const relativeMomentum = Math.min(2, Math.max(0.25, 1 + (c.relativeMomentum20 || 0)));
+  const repeatBoost = 1 + 0.15 * Math.max(0, (c.recentUpgrades60 || 1) - 1);
+  const risk = Math.max(0.10, c.volatility20 || 0.35);
+  return surprise * analysts * upside * relativeMomentum * repeatBoost / risk;
+}
+
+function scoreOne(c, p) {
+  let base;
+  if (p.sizingMode === 'equal') base = 1.0;
+  else if (p.sizingMode === 'by_upgrade') base = Math.max(c.targetChangePct, 0.01);
+  else if (p.sizingMode === 'composite') {
+    base = Math.pow(Math.max(c.targetChangePct, 0.01), p.compositeAlpha)
+      * Math.pow(Math.max(c.analystCount, 1), p.compositeBeta)
+      * Math.pow(Math.max(c.upsideUsed, 0.001), p.compositeGamma);
+  } else if (p.sizingMode === 'enhanced') {
+    base = scoreEnhanced(c);
+  } else base = 1.0;
+
+  if (p.avgRule === 'tier3') {
+    const changeBoost = c.histAvgChange != null && c.targetChangePct > c.histAvgChange;
+    const analystBoost = c.histAvgAnalyst != null && c.analystCount > c.histAvgAnalyst;
+    if (changeBoost || analystBoost) base *= p.avgBoostMult;
+  }
+  return Math.max(base, 0);
+}
+
+// 2026-07-29移除：原本這裡有一個「多因子（不含大盤相對動能）」的自創配置方式
+// (scoreMultifactorBatch)，跟同事backtest.js比對後發現他的引擎只有equal/revision/
+// score/enhanced四種配置方式，根本沒有這個模式——上次拿它去跟同事伺服器比對出的
+// 「排序相反」，其實是他的normalizeOptions()把不認得的allocation值靜默退回成'score'，
+// 兩邊比的根本不是同一個東西，不是真的bug。既然要改成跟同事一致的模型/命名，這個
+// 自創的配置方式直接移除，不留骨架。
+
+// 2026-08-01新增：證交稅率——賣出成交金額的0.3%(台股現制，只對賣方課徵)。使用者裁示
+// 只算證交稅、不算手續費(手續費依券商折讓差異大，證交稅是法定稅率沒有模糊空間)。
+// 2026-07-31~08-01曾經試過拿掉每日強制再平衡以降低換手/節稅，但實測連同新的出場/
+// 進場機制一起改，超額報酬反而從正轉負；回頭把「舊版強制再平衡」直接加上這個稅率
+// 重新測一次，扣稅後超額報酬依然是正的(+38.78%)——證明強制再平衡本身很可能是報酬
+// 來源之一(機械性汰弱留強/再平衡溢酬)，不只是成本，所以改成保留原本的每日強制
+// 再平衡機制，只新增這一項稅務成本，不動配置/出場邏輯本身。
+const TRANSACTION_TAX_RATE = 0.003;
+
+// scoresArr: [{ticker,score}] -> Map ticker->weight (只保留通過max_positions篩選後留在index裡的ticker)
+function allocateWeights(scoresArr, p) {
+  const sumAll = scoresArr.reduce((s, x) => s + x.score, 0);
+  if (sumAll <= 0) return new Map();
+  let arr = scoresArr;
+  if (p.maxPositions > 0 && arr.length > p.maxPositions) {
+    arr = arr.slice().sort((a, b) => b.score - a.score).slice(0, p.maxPositions);
+  }
+
+  // 水位填充(water-filling)：單檔壓到上限後，省下來的額度要分給還沒被壓到上限的
+  // 其他股票，讓總曝險真的能填滿到maxPortfolioExposure，不是壓完就讓那筆錢閒置。
+  // 反覆做「這輪按分數比例分配，誰超過上限就先鎖在上限、退出這輪，剩下的預算留給
+  // 還沒鎖住的股票」，直到沒有人再超過上限為止，對照同事版本的cappedWeights()。
+  let remaining = arr.map(x => ({ ticker: x.ticker, score: x.score }));
+  const result = new Map();
+  let budget = p.maxPortfolioExposure;
+  while (remaining.length > 0 && budget > 1e-12) {
+    const total = remaining.reduce((s, x) => s + x.score, 0) || remaining.length;
+    let cappedAny = false;
+    const stillRemaining = [];
+    for (const item of remaining) {
+      const proposed = budget * (total ? item.score / total : 1 / remaining.length);
+      if (proposed > p.maxWeightPerStock + 1e-12) {
+        result.set(item.ticker, p.maxWeightPerStock);
+        budget -= p.maxWeightPerStock;
+        cappedAny = true;
+      } else {
+        stillRemaining.push(item);
+      }
+    }
+    remaining = stillRemaining;
+    if (!cappedAny) {
+      const denom = remaining.reduce((s, x) => s + x.score, 0) || remaining.length;
+      for (const item of remaining) {
+        result.set(item.ticker, budget * (denom ? item.score / denom : 1 / remaining.length));
+      }
+      break;
+    }
+  }
+  return result;
+}
+
+function runBacktest(p, startDate, endDate, evUpOverride) {
+  const startIdx = bisectLeft(DATES, startDate);
+  const endIdx = bisectRight(DATES, endDate) - 1;
+  if (startIdx > endIdx || startIdx >= DATES.length || endIdx < 0) {
+    return { rows: [], summary: null, trades: [] };
+  }
+
+  const candsAll = filterCandidates(evUpOverride || EV_UP, p).filter(c => c.entryIdx >= startIdx && c.entryIdx <= endIdx);
+  const entriesByIdx = new Map();
+  candsAll.forEach(c => {
+    if (!entriesByIdx.has(c.entryIdx)) entriesByIdx.set(c.entryIdx, []);
+    entriesByIdx.get(c.entryIdx).push(c);
+  });
+
+  // 2026-07-28重寫：對照同事backtest.js的active/weights雙軌設計。原本「排名被擠出」直接
+  // 把股票從holdings刪掉，之後要再進場一定得等一則全新的新聞訊號——但同事的引擎不是這樣：
+  // 「排名被擠出」只是那天權重被壓到0(active裡的資格保留)，不是真的離開。只有真正達目標價/
+  // 調降/超過最長持有天數，才會把它從active名單踢出。這代表一檔被擠出的股票，隔幾天如果
+  // 競爭對手自己出場、名額空出來，同事的引擎會讓它「不需要任何新新聞」就自動用原本(可能已經
+  // 是好幾天前)的舊分數重新拿回權重。active(資格池)跟weightNow(今天實際權重)拆成兩個獨立
+  // 狀態才對得起來。
+  const active = new Map();    // ticker -> {entryIdx, target, score, entryPriceToday}
+  const weightNow = new Map(); // ticker -> 今天實際權重，只放weight>0的
+  const tradeEntry = new Map(); // ticker -> {entryDate, entryPrice}：這次active任期內第一次拿到權重時鎖定
+  const rows = [];
+  const trades = [];
+  // orders是逐單完整帳本，對照同事backtest.js的notionalTrades——每天只要權重有變動(進場/
+  // 出場/被擠出/重新配置)都各記一筆BUY/SELL(trades沿用round-trip格式，win_rate/payoff_ratio還是靠它算)。
+  const orders = [];
+
+  for (let i = startIdx; i <= endIdx; i++) {
+    const day = DATES[i];
+    const downToday = DOWN_BY_DATE.get(i) || new Set();
+    const prevDay = i > startIdx ? DATES[i - 1] : null;
+
+    // --- 隔夜段報酬：用「今天開盤前實際持有」的部位、當時(昨天收盤後)的權重，
+    // 算「昨收→今開」這段報酬。這段要在出場/重新配置動作之前算。同事backtest.js的
+    // positionReturns也是把OVERNIGHT/INTRADAY分兩筆記錄，這裡的overnightAttribution
+    // 補上同樣的個股層級明細，不是只算進當日總報酬。---
+    let overnightRet = 0;
+    const overnightAttribution = [];
+    if (prevDay != null) {
+      for (const [t, w] of weightNow) {
+        const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
+        const openNow = openArr ? openArr[i] : null;
+        const priorClose = priceArr ? priceArr[i - 1] : null;
+        const r = (openNow != null && priorClose != null && priorClose !== 0) ? (openNow / priorClose - 1) : null;
+        if (r != null) overnightRet += w * r;
+        overnightAttribution.push({ ticker: t, weight: w, priceStart: priorClose, priceEnd: openNow, ret: r, contribution: r != null ? w * r : null });
+      }
+    }
+
+    // --- 隔夜段結束、出場/重新配置動作之前：先算「自然漂移後」的權重——不重新配置的話，
+    // 權重會因為股價漲跌從最後一次配置的目標值移動，公式跟同事backtest.js的
+    // positionReturns一樣：weight_t = weight_{t-1} * (1+個股報酬)。注意這裡「不」除以
+    // 整體報酬做重新正規化——同事的權重是「相對固定名目本金」的算術權重，不是每天都
+    // 强制加總回1的複利權重，這也是為什麼他的exposure/cashWeight每天會偏離1(用
+    // DAILY_PROFIT_WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回現金，不是隱性重新分配到
+    // 還持有的部位上)。這個漂移後的權重才是「今天開盤當下實際持有」的權重，出場/重新
+    // 配置的weightBefore要用這個，不能繼續用「昨天配置完就再也不變」的舊weightNow——
+    // 不然SIGNAL_REBALANCE的weightBefore/weightAfter永遠一樣，跟同事真實交易紀錄
+    // (weightBefore是漂移後的非整數值)對不起來，這就是主管要求的「每天不管有沒有訊號
+    // 都轉回目標權重」的前提。
+    const driftedAtOpen = new Map();
+    for (const [t, w] of weightNow) {
+      const openArr = PRICES_OPEN[t], priceArr = PRICES[t];
+      const openNow = openArr ? openArr[i] : null;
+      const priorClose = priceArr ? priceArr[i - 1] : null;
+      const r = (openNow != null && priorClose != null && priorClose !== 0) ? (openNow / priorClose - 1) : null;
+      const drifted = r != null ? w * (1 + r) : w;
+      driftedAtOpen.set(t, drifted);
+    }
+
+    // 2026-08-01新增(實驗性)：分批停利
+    let taxCost = 0;
+    if (p.partialTakeFraction > 0) {
+      for (const [t, a] of active) {
+        if (a.partialTaken || a.target == null || a.entryPriceToday == null) continue;
+        const priceArr = PRICES[t];
+        const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
+        if (priorClose == null) continue;
+        const partialLevel = a.entryPriceToday + (p.partialTakeThresholdPct / 100) * (a.target - a.entryPriceToday);
+        if (priorClose >= partialLevel && priorClose < a.target) {
+          const oldW = driftedAtOpen.get(t) || 0;
+          const trimAmount = oldW * p.partialTakeFraction;
+          if (trimAmount > 1e-9) {
+            const openArr = PRICES_OPEN[t];
+            const execPrice = openArr ? openArr[i] : null;
+            const newW = oldW - trimAmount;
+            driftedAtOpen.set(t, newW);
+            weightNow.set(t, newW);
+            taxCost += trimAmount * TRANSACTION_TAX_RATE;
+            orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: newW, weightChange: -trimAmount, price: execPrice, reason: '分批停利' });
+          }
+          a.partialTaken = true;
+        }
+      }
+    }
+
+    // --- 真出場檢查(對active資格池，不是只看今天有沒有權重)：達目標價用「前一天收盤價」
+    // 判斷(對照今天開盤前就該知道的資訊，不能用今天收盤價，會有前視偏誤)；持有天數用
+    // 交易日數，從active設定的entryIdx算起。---
+    const toExit = [];
+    for (const [t, a] of active) {
+      const daysHeld = i - a.entryIdx;
+      const priceArr = PRICES[t];
+      const priorClose = i > 0 && priceArr ? priceArr[i - 1] : null;
+      let reason = null;
+      if (p.exitOnDown && downToday.has(t)) reason = '調降出場';
+      else if (p.exitOnTarget && priorClose != null && priorClose >= a.target) reason = '達目標價出場';
+      else if (daysHeld >= p.maxHoldDays) reason = '超過最長持有天數';
+      // 2026-08-01新增：單檔停損——不影響選股/配置邏輯，純粹風控加法，跟其他機制互不
+      // 牽動，最適合單獨測試因果關係。用「訊號進場當天的參考價」(entryPriceToday)當基準，
+      // 不是target，判斷時用前一天收盤價(對照達目標價出場同樣的前視偏誤迴避邏輯)。
+      // stopLossPct=0代表不啟用。
+      else if (p.stopLossPct > 0 && priorClose != null && a.entryPriceToday != null
+        && priorClose <= a.entryPriceToday * (1 - p.stopLossPct / 100)) reason = '停損出場';
+      if (reason) toExit.push([t, reason]);
+      // 2026-08-01新增(實驗性)：移動停損——固定停損只保護「不要跌破進場價太多」，
+      // 一檔股票噴出一倍之後，固定停損還是停在起漲點附近，等於放著一大段已經賺到的
+      // 漲幅完全沒有下檔保護。改成追蹤「進場以來看過的最高收盤價」，停損點隨最高價
+      // 往上移動，鎖住已實現的漲幅——最高價還沒創新高前，行為等同固定停損(基準點是
+      // entryPriceToday)，一旦股價噴出，停損點自動跟著往上調，讓贏家有機會抱更久。
+      // trailingStopPct=0代表不啟用；跟固定停損可以同時開，誰先觸發用誰。
+      if (p.trailingStopPct > 0 && a.entryPriceToday != null && priorClose != null) {
+        a.highestClose = Math.max(a.highestClose ?? a.entryPriceToday, priorClose);
+        if (!reason && priorClose <= a.highestClose * (1 - p.trailingStopPct / 100)) {
+          reason = '移動停損出場';
+          toExit.push([t, reason]);
+        }
+      }
+    }
+    const sellsToday = [];
+    for (const [t, reason] of toExit) {
+      active.delete(t);
+      const openArr = PRICES_OPEN[t];
+      const exitPrice = openArr ? openArr[i] : null;
+      const oldW = driftedAtOpen.get(t) || 0;
+      weightNow.delete(t);
+      if (tradeEntry.has(t)) {
+        const te = tradeEntry.get(t);
+        tradeEntry.delete(t);
+        trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
+        sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
+      }
+      if (oldW > 1e-9) {
+        orders.push({ date: day, ticker: t, side: 'SELL', weightBefore: oldW, weightAfter: 0, weightChange: -oldW, price: exitPrice, reason });
+        taxCost += oldW * TRANSACTION_TAX_RATE;
+      }
+    }
+
+    // --- 新訊號：合格的更新/加入active資格池，重設entryIdx跟目標價——新訊號代表重新起算
+    // 持有天數，不管這檔股票今天在不在active裡都要覆蓋。不合格的訊號(例如用自己的參考價
+    // 算出來上漲空間不夠)如果這檔股票「已經在active裡」，對照同事backtest.js的applyEvents()
+    // 「else if(active.has(ticker))」分支，只更新目標價，entryIdx/score/進場價都不動——
+    // 不是整篇忽略，這則新聞至少讓既有部位的出場門檻(達目標價出場)用到最新的價位；如果
+    // 這檔股票目前沒持有，才真的整篇忽略。---
+    const buysToday = [];
+    const newRowsByTicker = new Map(); // ticker -> {row, score}
+    const updateOnlyByTicker = new Map(); // ticker -> row(只更新目標價)
+    if (entriesByIdx.has(i)) {
+      const todaysAll = entriesByIdx.get(i);
+      if (todaysAll.length > 0) {
+        // 分數只算合格的那些，不合格的候選(它們不會真的進場，只用來更新目標價)不該
+        // 進入評分計算。
+        const qualifying = todaysAll.filter(c => c.qualifies);
+        if (qualifying.length > 0) {
+          const scoresArr = qualifying.map(c => scoreOne(c, p));
+          qualifying.forEach((c, idx) => newRowsByTicker.set(c.ticker, { row: c, score: scoresArr[idx] }));
+        }
+        todaysAll.filter(c => !c.qualifies).forEach(c => {
+          if (newRowsByTicker.has(c.ticker)) return;
+          if (active.has(c.ticker)) updateOnlyByTicker.set(c.ticker, c);
+        });
+      }
+    }
+    for (const [t, v] of newRowsByTicker) {
+      active.set(t, { entryIdx: i, target: v.row.newTarget, score: v.score, entryPriceToday: v.row.entryPriceUsed, referenceClose: v.row.referenceClose });
+    }
+    for (const [t, row] of updateOnlyByTicker) {
+      active.get(t).target = row.newTarget;
+    }
+
+    // --- 每天都對「整個active資格池」重新正規化權重(不是只有今天有變動的那一小部分)，
+    // 固定資本每日平帳：總曝險才會真的每天都保證不超過maxPortfolioExposure。今天沒被
+    // 分到權重的active成員，只是「被擠出」暫時領0權重，不會離開active，明天名額空出來
+    // 隨時可能不需要新訊號就拿回權重——這是跟同事引擎對齊的關鍵行為，不是bug。
+    // 2026-07-30修正：權重被壓到0(RANKED_OUT)那天，事實上已經是真的賣出(這筆錢已經換
+    // 回現金、當天就結算進dailyReturn了)，不是延後幾天等正式從active移除才算數。原本
+    // trades[]/sellsToday只在「正式出場」(達目標價/調降/超天數)才收單，導致：(1)真正
+    // 賣出的那天使用者在「今日動作」跟買賣明細表完全看不到這筆交易 (2) win_rate/
+    // payoff_ratio用的trades[]拿「正式移除active那天」的價格當出場價，但那天可能早就
+    // 沒部位了，出場價跟真正賣出的價格對不起來。改成用「權重是否穿越0」這個真實事件來
+    // 判斷買賣，跟是否為「新訊號」脫鉤——不管有沒有新聞觸發，只要權重從0變正/從正變0，
+    // 當天就是真實的進出場，trades[]/sellsToday都要在那一天記錄。---
+    if (active.size > 0) {
+      const combined = [...active.entries()].filter(([t, a]) => !a.partialTaken).map(([t, a]) => ({ ticker: t, score: a.score }));
+      const newWeights = allocateWeights(combined, p);
+      for (const [t, a] of active) {
+        if (a.partialTaken) continue;
+        const w = newWeights.get(t) || 0;
+        const oldW = driftedAtOpen.get(t) || 0;
+        const isFreshSignal = newRowsByTicker.has(t);
+        const openArr = PRICES_OPEN[t];
+        const isBuyCrossing = w > 1e-9 && oldW <= 1e-9;
+        const isSellCrossing = w <= 1e-9 && oldW > 1e-9;
+        if (isBuyCrossing) {
+          const entryPrice = isFreshSignal ? a.entryPriceToday : (openArr ? openArr[i] : null);
+          tradeEntry.set(t, { entryDate: day, entryPrice });
+          buysToday.push({ ticker: t, price: entryPrice, weight: w });
+        }
+        if (isSellCrossing && tradeEntry.has(t)) {
+          const te = tradeEntry.get(t);
+          tradeEntry.delete(t);
+          const exitPrice = openArr ? openArr[i] : null;
+          const reason = p.exitOnDown && downToday.has(t) ? '調降出場' : '排名擠出';
+          trades.push({ ticker: t, entryDate: te.entryDate, exitDate: day, entryPrice: te.entryPrice, exitPrice, reason });
+          sellsToday.push({ ticker: t, reason, entryPrice: te.entryPrice, entryDate: te.entryDate, exitPrice, weight: oldW });
+        }
+        const delta = w - oldW;
+        if (Math.abs(delta) > 1e-9) {
+          const reason = isBuyCrossing ? (isFreshSignal ? 'QUALIFIED_UPGRADE' : 'RANK_RECOVERED') : (isSellCrossing ? 'RANKED_OUT' : 'SIGNAL_REBALANCE');
+          orders.push({ date: day, ticker: t, side: delta > 0 ? 'BUY' : 'SELL', weightBefore: oldW, weightAfter: w, weightChange: delta, price: openArr ? openArr[i] : null, reason });
+          if (delta < 0) taxCost += Math.abs(delta) * TRANSACTION_TAX_RATE;
+        }
+        if (w > 1e-9) weightNow.set(t, w); else weightNow.delete(t);
+      }
+    }
+
+    // --- 盤中段報酬：用「今天重新配置完」的新權重，算「今開→今收」這段報酬。今天出場
+    // 或被擠出的部位權重已經是0，不會有盤中段貢獻(對照同事版本的既有簡化)。---
+    let intradayRet = 0;
+    const attribution = [];
+    for (const [t, w] of weightNow) {
+      const a = active.get(t);
+      const isEntryDay = a ? a.entryIdx === i : false;
+      const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
+      const priceEnd = priceArr ? priceArr[i] : null;
+      const priceStart = openArr ? openArr[i] : null;
+      const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
+      if (r != null) intradayRet += w * r;
+      attribution.push({ ticker: t, weight: w, priceStart, priceEnd, ret: r, contribution: r != null ? w * r : null, target: a ? a.target : null, referenceClose: a ? a.referenceClose : null, isEntryDay });
+    }
+    const dailyRet = overnightRet + intradayRet - taxCost;
+    // 2026-07-28修正：TAIEX_RET是loadAll()時對「全部歷史」一次算好的全域陣列(2021年至今)，
+    // 不是針對「這次回測視窗」算的。如果回測起始日不是資料庫裡最早的那天(例如startDate=
+    // 2023-01-01，但DATES其實從2021年就有資料)，TAIEX_RET[startIdx]算的是「視窗外前一天
+    // (可能是2022年底)到視窗第一天」這段報酬，會被誤算進這次回測的大盤累積報酬——實測
+    // 全期間2023-01-01~2026-07-24的大盤報酬因此從120.37%被灌水到120.99%，多算了視窗外
+    // 那一天的報酬。同事backtest.js第166行用區域變數previousBenchmark(每次回測重新歸零)
+    // 天生沒這個問題，我們這裡用window起點強制歸零來對齊：視窗第一天的大盤報酬永遠算0，
+    // 不看TAIEX_RET[startIdx]實際值是多少。
+    const taiexRet = i === startIdx ? 0 : (TAIEX_RET[i] != null ? TAIEX_RET[i] : 0);
+
+    // --- exposure欄位對照同事的定義：不是「今天重新配置完」的乾淨目標權重總和(那個
+    // 恆等於1，因為每次都用maxPortfolioExposure水位填滿)，是「今天盤中段自然漂移『後』」
+    // 的權重總和——同事的exposure/cashWeight每天會偏離1，是因為他用DAILY_PROFIT_
+    // WITHDRAWAL/DAILY_LOSS_TOPUP把損益結算回現金，不是隱性重新分配到持倉上，所以
+    // exposure = 1 + 當天盤中段總貢獻(約略，因為隔夜段的損益已經在前一天結算過了)。
+    // 這裡先算出漂移後的權重(driftedAtClose)，取代原本收盤後才另外算一次的做法。
+    const driftedAtClose = new Map();
+    for (const [t, w] of weightNow) {
+      const priceArr = PRICES[t], openArr = PRICES_OPEN[t];
+      const priceEnd = priceArr ? priceArr[i] : null;
+      const priceStart = openArr ? openArr[i] : null;
+      const r = (priceEnd != null && priceStart != null && priceStart !== 0) ? (priceEnd / priceStart - 1) : null;
+      driftedAtClose.set(t, r != null ? w * (1 + r) : w);
+    }
+    let exposure = 0;
+    for (const w of driftedAtClose.values()) exposure += w;
+
+    rows.push({
+      idx: i, date: day,
+      holdings: [...weightNow.entries()].map(([t, w]) => ({ ticker: t, weight: w, target: active.get(t) ? active.get(t).target : null })),
+      attribution, overnightAttribution,
+      nPositions: weightNow.size, exposure,
+      dailyReturn: dailyRet, taiexReturn: taiexRet, taxCost,
+      buys: buysToday, sells: sellsToday,
+      sizingLabel: p.sizingMode, maxPositions: p.maxPositions, maxWeightPerStock: p.maxWeightPerStock,
+    });
+
+    // --- 收盤後把weightNow換成剛剛就算好的driftedAtClose(盤中段自然漂移後、同樣不重新
+    // 正規化的權重)，作為明天隔夜段的起始權重——今天的holdings/attribution顯示仍然是
+    // 「今天重新配置完」的乾淨目標權重(對照同事盤中段attribution也是顯示目標權重)，漂移
+    // 只影響「明天開盤前」的driftedAtOpen計算，這樣才跟同事「兩次配置之間權重隨股價自然
+    // 漂移、不強制加總回1」的每日結轉邏輯一致。---
+    for (const [t, w] of driftedAtClose) weightNow.set(t, w);
+  }
+
+  let cum = 0, cumTaiex = 0;
+  for (const r of rows) {
+    cum += r.dailyReturn; cumTaiex += r.taiexReturn;
+    r.cumReturn = cum; r.cumTaiex = cumTaiex; r.excess = cum - cumTaiex;
+  }
+
+  const summary = summarize(rows, trades, orders);
+  return { rows, summary, trades, orders };
+}
+
+function summarize(rows, trades, orders) {
+  if (rows.length === 0) return null;
+  const daily = rows.map(r => r.dailyReturn);
+  const totalReturn = rows[rows.length - 1].cumReturn;
+  const totalTaiex = rows[rows.length - 1].cumTaiex;
+  const annFactor = 252 / rows.length;
+  const dMean = mean(daily);
+  const dStd = daily.length > 1 ? stdSample(daily) : 0;
+  const sharpe = dStd > 0 ? (dMean / dStd) * Math.sqrt(252) : null;
+
+  // 2026-07-28修正：對照同事backtest.js的stats()——回撤要用「權益比峰值」算百分比
+  // ((1+cum)/(1+peak)-1)，不是直接拿累積報酬點數相減。算術累加報酬會一直往上疊加，
+  // 峰值(1+peakCum)通常遠大於1，不除以這個峰值基期，算出來的回撤百分比會被系統性
+  // 高估——這正是這幾輪比對下來，我們的回撤數字一直比同事的大上不少、但超額報酬跟
+  // Sharpe都已經對得很準的根因：只有回撤這個指標算錯，其他指標的公式本來就沒有這個
+  // 「除以峰值基期」的步驟，不受影響。
+  let runningMax = -Infinity, maxDD = 0;
+  for (const r of rows) {
+    runningMax = Math.max(runningMax, r.cumReturn);
+    maxDD = Math.min(maxDD, (1 + r.cumReturn) / (1 + runningMax) - 1);
+  }
+
+  const closedTrades = trades.filter(t => t.exitPrice != null);
+  const rets = closedTrades.map(t => (t.exitPrice - t.entryPrice) / t.entryPrice);
+  const wins = rets.filter(r => r > 0), losses = rets.filter(r => r <= 0);
+  const winRate = rets.length ? wins.length / rets.length : null;
+  const avgWin = wins.length ? mean(wins) : null;
+  const avgLoss = losses.length ? mean(losses) : null;
+  const payoff = (avgWin != null && avgLoss) ? Math.abs(avgWin / avgLoss) : null;
+
+  return {
+    totalReturnPct: totalReturn * 100,
+    totalTaiexReturnPct: totalTaiex * 100,
+    excessReturnPct: (totalReturn - totalTaiex) * 100,
+    annualizedReturnPct: totalReturn * annFactor * 100,
+    sharpe, maxDrawdownPct: maxDD * 100,
+    nTrades: trades.length,
+    // nOrders：對照同事backtest.js的tradeCount，逐單完整計數(進場+出場+既有持股的權重
+    // 再平衡)，才是能跟同事「交易數」直接比較的口徑；nTrades是round-trip(一筆完整進出場)。
+    nOrders: orders ? orders.length : null,
+    winRatePct: winRate != null ? winRate * 100 : null,
+    payoffRatio: payoff,
+    tradingDays: rows.length,
+  };
+}
+
+
+// ============================================================================
+// 參數讀取 / 格式化
+// ============================================================================
+
+function readParams() {
+  return {
+    minUpgradePct: Number(document.getElementById('p-minUpgrade').value),
+    minAnalystCount: Number(document.getElementById('p-minAnalyst').value),
+    minUpside: Number(document.getElementById('p-minUpside').value) / 100,
+    maxHoldDays: Number(document.getElementById('p-maxHold').value),
+    stopLossPct: Number(document.getElementById('p-stopLoss').value),
+    trailingStopPct: Number(document.getElementById('p-trailingStop').value),
+    partialTakeThresholdPct: Number(document.getElementById('p-partialTakeThreshold').value),
+    partialTakeFraction: Number(document.getElementById('p-partialTakeFraction').value) / 100,
+    exitOnDown: document.getElementById('p-exitDown').checked,
+    exitOnTarget: document.getElementById('p-exitTarget').checked,
+    sizingMode: document.getElementById('p-sizing').value,
+    compositeAlpha: Number(document.getElementById('p-alpha').value),
+    compositeBeta: Number(document.getElementById('p-beta').value),
+    compositeGamma: Number(document.getElementById('p-gamma').value),
+    maxWeightPerStock: Number(document.getElementById('p-maxWeight').value) / 100,
+    maxPositions: Number(document.getElementById('p-maxPositions').value),
+    maxPortfolioExposure: Number(document.getElementById('p-maxExposure').value) / 100,
+    avgRule: document.getElementById('p-avgRule').value,
+    avgBoostMult: Number(document.getElementById('p-avgBoost').value),
+    conceptFilters: [...SELECTED_CONCEPTS],
+  };
+}
+
+document.getElementById('p-sizing').addEventListener('change', (e) => {
+  document.getElementById('composite-params').style.display = e.target.value === 'composite' ? '' : 'none';
+});
+
+const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
+const fmtNum2 = (v, digits = 2) => v == null ? '—' : v.toFixed(digits);
+const sizingLabelMap = { equal: '等權配置', by_upgrade: '調升幅度加權', composite: '原始綜合分數', enhanced: '第二代多因子分數' };
+
+// ============================================================================
+// 上方摘要卡片 / 資料涵蓋度
+// ============================================================================
+
+function renderCards(summary, bestExcessInfo, rows) {
+  const container = document.getElementById('card-row-holder');
+  if (!summary) { container.innerHTML = '<div class="empty-state" style="padding:30px;">這段區間沒有符合條件的交易，無法產生結果。</div>'; return; }
+
+  // 2026-07-28新增：策略是每日固定資本平帳(獲利/虧損當天結清，不滾入隔天本金)，跟同事
+  // backtest.js的stats()一樣，拿「大盤每日報酬也用同一種不滾入本金的算術口徑」去比超額
+  // 報酬，是公平的蘋果比蘋果——這就是上面「台股加權指數」卡片的算法，不用改。
+  // 但市場上一般講「有沒有擊敗大盤」，指的通常是「複利買進持有」的真實報酬，這是另一個
+  // 問題(策略實際操作下的真金白銀 vs 單純買進持有不動的真金白銀)，同事的stats()也另外
+  // 算了一個benchmarkPriceReturn(真實指數點位漲幅，複利)供這個用途，我們CSV匯出本來就有
+  // 算(benchmarkPriceCumulative)，這裡額外拉出來獨立成一張卡片，不影響任何既有計算。
+  let buyHoldPct = null;
+  if (rows && rows.length && TAIEX[rows[0].idx] != null) {
+    const taiexBase = TAIEX[rows[0].idx];
+    const taiexEnd = TAIEX[rows[rows.length - 1].idx];
+    if (taiexEnd != null) buyHoldPct = (taiexEnd / taiexBase - 1) * 100;
+  }
+  const vsBuyHold = buyHoldPct != null ? summary.totalReturnPct - buyHoldPct : null;
+  const isUp = summary.excessReturnPct >= 0;
+
+  // 2026-07-29重寫：原本5張卡片同權重並排，「大盤買進持有(真實複利)」常常比策略本身
+  // 的數字還大，卻沒有任何視覺提示這是「另一種算法」，第一眼看很容易誤以為策略是失敗
+  // 的。改成一個headline(目前參數超額報酬，這是使用者當下最想知道的答案)+兩個直接
+  // 構成它的子數字(策略總報酬/大盤總報酬，同一種算術口徑，加減關係一目瞭然)，複利
+  // 買進持有這個容易混淆的數字收進可展開的說明框，不再跟headline搶視覺權重。「訓練期
+  // 最佳參數超額報酬」整個移除——那是優化器自己選出的另一組參數的結果，不是「目前」
+  // 設定的答案，放在這裡容易跟headline搞混，優化器區塊自己的推薦卡片已經有這個數字。
+  container.innerHTML = `
+    <div class="hero-block">
+      <div class="hero-top">
+        <div>
+          <div class="hero-label">目前參數超額報酬（策略 − 大盤，算術口徑）</div>
+          <div class="hero-value ${isUp ? 'up' : 'down'}">${fmtPct(summary.excessReturnPct)}</div>
+          <div class="hero-sub">${document.getElementById('p-start').value} → ${document.getElementById('p-end').value} · Sharpe ${fmtNum2(summary.sharpe)} · 最大回撤 ${fmtPct(summary.maxDrawdownPct)}</div>
+        </div>
+        <span class="hero-badge ${isUp ? 'up' : 'down'}">${isUp ? '目前打敗大盤' : '目前落後大盤'}</span>
+      </div>
+      <div class="hero-split">
+        <div class="hero-mini">
+          <div class="label">我們的策略</div>
+          <div class="value ${summary.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(summary.totalReturnPct)}</div>
+        </div>
+        <div class="hero-mini">
+          <div class="label">台股加權指數（同算術口徑）</div>
+          <div class="value">${fmtPct(summary.totalTaiexReturnPct)}</div>
+        </div>
+      </div>
+      <details class="hero-detail-toggle">
+        <summary>還有一種「複利買進持有」算法，數字會不一樣——點開看為什麼</summary>
+        <div class="hero-detail-body">
+          上面用的是「每日固定資本平帳」算術口徑：策略跟大盤都用同一種「獲利/虧損當天結清、不滾入隔天本金」的算法比，是公平的蘋果比蘋果，也是超額報酬的計算基礎。<br/><br/>
+          但如果單純「買大盤指數放著不動」，實際上獲利是會複利滾動的，用這種算法算出來的大盤漲幅是
+          <span class="value">${buyHoldPct != null ? fmtPct(buyHoldPct) : '—'}</span>，
+          跟策略總報酬(${fmtPct(summary.totalReturnPct)})相減 = ${vsBuyHold != null ? fmtPct(vsBuyHold) : '—'}，
+          這個數字才是「策略有沒有真的贏過單純買大盤指數放著不動」的答案。兩種算法都對，只是回答不同的問題。
+        </div>
+      </details>
+    </div>`;
+}
+
+function renderCoverage() {
+  const container = document.getElementById('coverage-holder');
+  const tickerCount = Object.keys(PRICES).length;
+  let priceDayCount = 0;
+  for (const arr of Object.values(PRICES)) for (const v of arr) if (v != null) priceDayCount++;
+  const validEvents = EV_UP.length;
+  const unmatched = RAW_UP_COUNT - EV_UP.length;
+  container.innerHTML = `
+    <div class="coverage-strip">
+      <div class="coverage-item"><div class="label">行情涵蓋</div><div class="value mono">${tickerCount}/${tickerCount} 檔 · ${priceDayCount.toLocaleString()} 日行情</div></div>
+      <div class="coverage-item"><div class="label">有效新聞事件</div><div class="value mono">${validEvents.toLocaleString()}</div></div>
+      <div class="coverage-item"><div class="label">無法配對事件</div><div class="value mono">${unmatched.toLocaleString()}</div></div>
+      <div class="coverage-item"><div class="label">會計方法</div><div class="value">每日固定資本平帳</div></div>
+    </div>`;
+}
+
+function renderCurve(rows) {
+  const container = document.getElementById('curve-holder');
+  if (!rows.length) { container.innerHTML = ''; return; }
+  const W = 900, H = 300, padL = 46, padR = 16, padT = 14, padB = 22;
+  const vals = rows.flatMap(r => [r.cumReturn * 100, r.cumTaiex * 100]);
+  let vMin = Math.min(...vals, 0), vMax = Math.max(...vals, 0);
+  if (vMin === vMax) { vMin -= 1; vMax += 1; }
+  const pad = (vMax - vMin) * 0.08;
+  vMin -= pad; vMax += pad;
+  const x = i => padL + (i / Math.max(rows.length - 1, 1)) * (W - padL - padR);
+  const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const upColor = cssVar('--up');
+
+  let gridLines = '';
+  for (let i = 0; i <= 3; i++) {
+    const gv = vMin + (vMax - vMin) * (i / 3);
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  const zeroY = y(0);
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1" stroke-dasharray="3,3"/>`;
+
+  const stratPath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.cumReturn * 100).toFixed(1)}`).join(' ');
+  const taiexPath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.cumTaiex * 100).toFixed(1)}`).join(' ');
+
+  const svgId = 'sc' + Math.random().toString(36).slice(2, 9);
+  container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${gridLines}
+    <path d="${taiexPath}" fill="none" stroke="${inkFaint}" stroke-width="2" stroke-linejoin="round"/>
+    <path d="${stratPath}" fill="none" stroke="${upColor}" stroke-width="2.4" stroke-linejoin="round"/>
+    <rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" id="${svgId}-hit"/>
+  </svg>
+  <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--ink-faint); margin-top:4px;">
+    <span>${rows[0].date}</span><span>${rows[Math.floor(rows.length/2)].date}</span><span>${rows[rows.length-1].date}</span>
+  </div>`;
+
+  const svg = document.getElementById(svgId);
+  const hit = document.getElementById(`${svgId}-hit`);
+  hit.style.cursor = 'crosshair';
+  hit.addEventListener('mousemove', (evt) => {
+    const rect = svg.getBoundingClientRect();
+    const relX = (evt.clientX - rect.left) / rect.width * W;
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((relX - padL) / (W - padL - padR) * (rows.length - 1))));
+    const r = rows[i];
+    showTip(evt, `<b>${r.date}</b><br/>策略：<b>${fmtPct(r.cumReturn * 100)}</b><br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b>`);
+  });
+  hit.addEventListener('mouseleave', hideTip);
+}
+
+// 2026-07-29新增：超額報酬(策略累積-大盤累積)單獨畫一張圖，不用再自己心算兩條線的
+// 距離——正超額用up色填色、負超額用down色填色，一眼就看得出策略跑贏/跑輸大盤的區間。
+function renderExcessCurve(rows) {
+  const container = document.getElementById('excess-curve-holder');
+  if (!rows.length) { container.innerHTML = ''; return; }
+  const W = 900, H = 220, padL = 46, padR = 16, padT = 14, padB = 22;
+  const vals = rows.map(r => r.excess * 100);
+  let vMin = Math.min(...vals, 0), vMax = Math.max(...vals, 0);
+  if (vMin === vMax) { vMin -= 1; vMax += 1; }
+  const pad = (vMax - vMin) * 0.08;
+  vMin -= pad; vMax += pad;
+  const x = i => padL + (i / Math.max(rows.length - 1, 1)) * (W - padL - padR);
+  const y = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar('--grid'), inkFaint = cssVar('--ink-faint');
+  const upColor = cssVar('--up'), downColor = cssVar('--down');
+
+  let gridLines = '';
+  for (let i = 0; i <= 3; i++) {
+    const gv = vMin + (vMax - vMin) * (i / 3);
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  const zeroY = y(0);
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1" stroke-dasharray="3,3"/>`;
+
+  const linePath = rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.excess * 100).toFixed(1)}`).join(' ');
+  const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + rows.map((r, i) => `L${x(i).toFixed(1)},${y(r.excess * 100).toFixed(1)}`).join(' ') + ` L${x(rows.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+
+  const svgId = 'ec' + Math.random().toString(36).slice(2, 9);
+  container.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <clipPath id="${svgId}-pos"><rect x="0" y="0" width="${W}" height="${zeroY.toFixed(1)}"/></clipPath>
+      <clipPath id="${svgId}-neg"><rect x="0" y="${zeroY.toFixed(1)}" width="${W}" height="${(H - zeroY).toFixed(1)}"/></clipPath>
+    </defs>
+    ${gridLines}
+    <path d="${areaPath}" fill="${upColor}" opacity="0.18" clip-path="url(#${svgId}-pos)"/>
+    <path d="${areaPath}" fill="${downColor}" opacity="0.18" clip-path="url(#${svgId}-neg)"/>
+    <path d="${linePath}" fill="none" stroke="${cssVar('--accent')}" stroke-width="2.2" stroke-linejoin="round"/>
+    <rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" id="${svgId}-hit"/>
+  </svg>
+  <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--ink-faint); margin-top:4px;">
+    <span>${rows[0].date}</span><span>${rows[Math.floor(rows.length/2)].date}</span><span>${rows[rows.length-1].date}</span>
+  </div>`;
+
+  const svg = document.getElementById(svgId);
+  const hit = document.getElementById(`${svgId}-hit`);
+  hit.style.cursor = 'crosshair';
+  hit.addEventListener('mousemove', (evt) => {
+    const rect = svg.getBoundingClientRect();
+    const relX = (evt.clientX - rect.left) / rect.width * W;
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((relX - padL) / (W - padL - padR) * (rows.length - 1))));
+    const r = rows[i];
+    showTip(evt, `<b>${r.date}</b><br/>超額：<b>${fmtPct(r.excess * 100)}</b><br/>策略：<b>${fmtPct(r.cumReturn * 100)}</b><br/>加權指數：<b>${fmtPct(r.cumTaiex * 100)}</b>`);
+  });
+  hit.addEventListener('mouseleave', hideTip);
+}
+
+// ============================================================================
+// 樣本外滾動勝率(2026-08-01新增)
+// ============================================================================
+// 跟上面兩張圖(單一參數套用全期間)不同，這裡是把全期間切成好幾段獨立的樣本外
+// 驗證：每段只用前12個月資料訓練(buildFoldEvUp的140天緩衝邏輯一併沿用，
+// 對照優化器現有的做法)、驗證接下來3個月「完全沒看過」的資料，一路滾動切過
+// 整個回測窗口——這是這次跟使用者一起摸索出來、目前公認最誠實的驗證方法，
+// 不容易被單一區間的運氣影響。跟頁面上其他圖表一樣是reactive的，參數改變會
+// 自動重算(見scheduleAutoRun)。
+function addMonths(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+function computeRollingWindows(params) {
+  const dataStart = '2023-01-01';
+  const dataEnd = DATES[DATES.length - 1];
+  const trainMonths = 12, testMonths = 3;
+  const windows = [];
+  let testStart = addMonths(dataStart, trainMonths);
+  while (testStart < dataEnd) {
+    const trainStart = addMonths(testStart, -trainMonths);
+    let testEnd = addMonths(testStart, testMonths);
+    if (testEnd > dataEnd) testEnd = dataEnd;
+    windows.push({ trainStart, testStart, testEnd });
+    testStart = addMonths(testStart, testMonths);
+  }
+  const results = [];
+  for (const w of windows) {
+    const evUp = buildFoldEvUp(w.trainStart);
+    const { summary } = runBacktest(params, w.testStart, w.testEnd, evUp);
+    results.push({ ...w, excess: summary ? summary.excessReturnPct : null });
+  }
+  return results;
+}
+
+function renderRollingChart(summaryContainer, chartContainer, windows) {
+  const valid = windows.filter(w => w.excess != null);
+  if (!valid.length) {
+    summaryContainer.innerHTML = '';
+    chartContainer.innerHTML = `<div class="chart-empty">資料不足，無法產生樣本外滾動驗證(至少需要12個月訓練期+3個月驗證期)</div>`;
+    return;
+  }
+  const nBeat = valid.filter(w => w.excess > 0).length;
+  const winRate = nBeat / valid.length * 100;
+  const avgExcess = valid.reduce((s, w) => s + w.excess, 0) / valid.length;
+  const isGood = winRate >= 50;
+
+  summaryContainer.innerHTML = `
+    <div class="hero-block" style="margin-bottom:14px;">
+      <div class="hero-top">
+        <div>
+          <div class="hero-label">樣本外滾動勝率（${valid.length}段獨立驗證中，打敗大盤的比例）</div>
+          <div class="hero-value ${isGood ? 'up' : 'down'}">${winRate.toFixed(1)}%</div>
+          <div class="hero-sub">${nBeat} / ${valid.length} 段打贏大盤 · 平均每段超額報酬 ${fmtPct(avgExcess)}</div>
+        </div>
+        <span class="hero-badge ${isGood ? 'up' : 'down'}">${isGood ? '過半數樣本外驗證打敗大盤' : '不到一半樣本外驗證打敗大盤'}</span>
+      </div>
+    </div>`;
+
+  const W = 900, H = 200, padL = 46, padR = 16, padT = 16, padB = 36;
+  const vals = valid.map(w => w.excess).concat([0]);
+  let vMin = Math.min(...vals), vMax = Math.max(...vals);
+  if (vMin === vMax) { vMin -= 5; vMax += 5; }
+  const vPad = (vMax - vMin) * 0.15;
+  vMin -= vPad; vMax += vPad;
+  const n = valid.length;
+  const bandW = (W - padL - padR) / n;
+  const barW = Math.max(6, bandW * 0.6);
+  const yScale = v => padT + (1 - (v - vMin) / (vMax - vMin)) * (H - padT - padB);
+  const zeroY = yScale(0);
+
+  const cssVar2 = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar2('--grid'), inkFaint = cssVar2('--ink-faint');
+  const upColor = cssVar2('--up'), downColor = cssVar2('--down');
+
+  let gridLines = '';
+  for (let i = 0; i <= 3; i++) {
+    const gv = vMin + (vMax - vMin) * (i / 3);
+    const gy = yScale(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL-8}" y="${(gy+3.5).toFixed(1)}" font-size="9.5" fill="${inkFaint}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  }
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W-padR}" y2="${zeroY.toFixed(1)}" stroke="${inkFaint}" stroke-width="1.2"/>`;
+
+  let bars = '', xLabels = '';
+  valid.forEach((w, i) => {
+    const cx = padL + bandW * i + bandW / 2;
+    const barY = yScale(w.excess);
+    const barH = Math.abs(barY - zeroY);
+    const top = w.excess >= 0 ? barY : zeroY;
+    const color = w.excess >= 0 ? upColor : downColor;
+    bars += `<rect class="rw-bar" data-i="${i}" x="${(cx-barW/2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(barH,1).toFixed(1)}" fill="${color}" rx="2"/>`;
+    xLabels += `<text x="${cx.toFixed(1)}" y="${H-10}" font-size="9" fill="${inkFaint}" text-anchor="middle">${w.testStart.slice(2)}</text>`;
+  });
+
+  const svgId = 'rw' + Math.random().toString(36).slice(2, 9);
+  chartContainer.innerHTML = `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${gridLines}${bars}${xLabels}
+  </svg>`;
+  const svg = document.getElementById(svgId);
+  svg.querySelectorAll('.rw-bar').forEach(bar => {
+    bar.style.cursor = 'pointer';
+    bar.addEventListener('mousemove', (evt) => {
+      const i = Number(bar.dataset.i);
+      const w = valid[i];
+      showTip(evt, `<b>${w.testStart} ~ ${w.testEnd}</b><br/>訓練期：${w.trainStart} ~ ${w.testStart}<br/>樣本外超額報酬：<b>${fmtPct(w.excess)}</b>`);
+    });
+    bar.addEventListener('mouseleave', hideTip);
+  });
+}
+
+const tooltipEl = document.getElementById('tooltip');
+function showTip(evt, html) {
+  tooltipEl.innerHTML = html;
+  tooltipEl.style.display = 'block';
+  tooltipEl.style.left = Math.min(evt.clientX + 14, window.innerWidth - 220) + 'px';
+  tooltipEl.style.top = Math.max(evt.clientY - 10, 10) + 'px';
+}
+function hideTip() { tooltipEl.style.display = 'none'; }
+
+// ============================================================================
+// 每日帳本(Daily Ledger)：開盤操作清單、當日說明、持股/買賣、個股歸因、CSV匯出
+// ============================================================================
+let CURRENT_ROWS = [];
+
+// 2026-07-28修正：對照同事public/strategy.js的renderMorning()，整股換算是floor(權重×資金
+// ÷股價)算到單股，不是先除以1000取整張(1000股)再乘回去——同一筆資金拿去比對，兩邊算出來
+// 的股數會不一樣。改成跟他一致的單股捨去，不做1000股取整。
+function lotsFor(weight, capital, price) {
+  if (price == null || price <= 0) return null;
+  return Math.floor((weight * capital) / price);
+}
+
+// 2026-07-29重寫：原本是一整段文字塞進單一<p>——配置規則、持股清單、交易筆數、
+// 當日報酬、資金流全部黏在一起，使用者要逐字讀完一長串句子才能抓到重點，而且
+// 「當日報酬」「資金流」這兩個數字上面的stat-card卡片已經顯示過一次，這裡又用
+// 文字重複講一次，是同一份資訊出現兩次。改成拆成幾個獨立小標籤(chip)：規則設定
+// 一組、持股組成一組、交易動作一組，一眼掃過去就分得出「這是規則」「這是持股」
+// 「這是今天的動作」，不用逐字閱讀；不重複顯示卡片已經有的當日報酬/資金流數字。
+function buildDailyExplanation(r, prevRow) {
+  if (r.holdings.length === 0) {
+    return `<p style="margin:0;">${r.date} 目前無符合條件的持股。</p>`;
+  }
+  const sizing = sizingLabelMap[r.sizingLabel] || r.sizingLabel;
+  const capLabel = r.maxPositions > 0 ? `最多 ${r.maxPositions} 檔` : '不限持股數';
+  const holdingsSorted = r.holdings.slice().sort((a, b) => b.weight - a.weight);
+  const topChips = holdingsSorted.slice(0, 5).map(h => `<span class="explain-chip">${tickerLabel(h.ticker)} <b>${(h.weight * 100).toFixed(1)}%</b></span>`).join('');
+  const nBuy = r.buys.length, nSell = r.sells.length;
+
+  return `
+    <div class="explain-row">
+      <span class="explain-row-label">規則設定</span>
+      <span class="explain-chip">${sizing}</span>
+      <span class="explain-chip">${capLabel}</span>
+      <span class="explain-chip">單檔上限 ${(r.maxWeightPerStock * 100).toFixed(0)}%</span>
+    </div>
+    <div class="explain-row">
+      <span class="explain-row-label">收盤後持股（共 ${r.holdings.length} 檔）</span>
+      ${topChips}${r.holdings.length > 5 ? `<span class="explain-chip explain-chip-muted">+${r.holdings.length - 5} 檔</span>` : ''}
+    </div>
+    <div class="explain-row">
+      <span class="explain-row-label">今日動作</span>
+      <span class="explain-chip ${nBuy > 0 ? 'explain-chip-buy' : ''}">買進 ${nBuy} 筆</span>
+      <span class="explain-chip ${nSell > 0 ? 'explain-chip-sell' : ''}">賣出 ${nSell} 筆</span>
+    </div>`;
+}
+
+// ============================================================================
+// 個股歷史表現(2026-08-01新增)
+// ============================================================================
+// 不做per-ticker優化——每一檔股票都套用左側同一組(已經用滾動walk-forward驗證過的)
+// 參數，這裡只是描述性統計「這組參數套在這檔股票上，過去實際觸發過幾次訊號、
+// 表現如何」，不是重新幫這檔股票量身找一組專屬最佳參數。逐檔各自優化在樣本數
+// 通常只有個位數次的情況下，統計上非常不穩，容易overfitting；用共用參數看
+// 每檔股票自己的歷史track record，才是回答「以後投資這檔股票要用什麼參數看」
+// 這個問題不會引入額外overfitting風險的做法。直接複用runBacktest()回傳的
+// trades[]，不需要另外重跑。
+const TRACK_LOW_CONFIDENCE_COUNT = 3;
+let LAST_TRADES = [];
+function computePerTickerTrackRecord(trades) {
+  const byTicker = new Map();
+  trades.forEach(t => {
+    if (t.exitPrice == null || t.entryPrice == null) return;
+    if (!byTicker.has(t.ticker)) byTicker.set(t.ticker, []);
+    byTicker.get(t.ticker).push(t);
+  });
+  const rows = [];
+  for (const [ticker, list] of byTicker) {
+    const returns = list.map(t => (t.exitPrice - t.entryPrice) / t.entryPrice * 100);
+    const wins = returns.filter(r => r > 0).length;
+    const holdDays = list.map(t => {
+      const eIdx = dateIdxMap.get(t.entryDate), xIdx = dateIdxMap.get(t.exitDate);
+      return (eIdx != null && xIdx != null) ? (xIdx - eIdx) : null;
+    }).filter(d => d != null);
+    rows.push({
+      ticker, count: list.length,
+      winRate: wins / list.length * 100,
+      avgReturn: mean(returns),
+      avgHoldDays: holdDays.length ? mean(holdDays) : null,
+      lastExitDate: list.map(t => t.exitDate).sort().slice(-1)[0],
+    });
+  }
+  return rows;
+}
+function renderTrackRecord(trades) {
+  LAST_TRADES = trades;
+  const section = document.getElementById('track-record-section');
+  const holder = document.getElementById('track-record-holder');
+  const rows = computePerTickerTrackRecord(trades);
+  if (!rows.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  const sortKey = document.getElementById('track-sort-select').value;
+  const sorted = rows.slice().sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    return (bv == null ? -Infinity : bv) - (av == null ? -Infinity : av);
+  });
+  const rowsHtml = sorted.map(r => {
+    const lowConf = r.count < TRACK_LOW_CONFIDENCE_COUNT;
+    return `<tr class="${lowConf ? 'low-confidence' : ''}" ${lowConf ? 'title="樣本數過少，數字僅供參考"' : ''}>
+      <td><b>${tickerLabel(r.ticker)}</b>${lowConf ? '<span class="low-conf-tag">樣本少</span>' : ''}</td>
+      <td class="mono">${r.count}</td>
+      <td class="mono" style="color:${r.winRate >= 50 ? 'var(--up)' : 'var(--down)'};">${r.winRate.toFixed(0)}%</td>
+      <td class="mono" style="color:${r.avgReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.avgReturn)}</td>
+      <td class="mono">${r.avgHoldDays != null ? r.avgHoldDays.toFixed(1) : '—'}日</td>
+      <td class="mono">${r.lastExitDate}</td>
+    </tr>`;
+  }).join('');
+  holder.innerHTML = `
+    <div class="table-wrap">
+      <table class="book-table">
+        <thead><tr><th>股票</th><th>交易次數</th><th>勝率</th><th>平均報酬</th><th>平均持有天數</th><th>最近一次出場</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+document.getElementById('track-sort-select').addEventListener('change', () => renderTrackRecord(LAST_TRADES));
+
+function renderLedger(rows) {
+  CURRENT_ROWS = rows;
+  const section = document.getElementById('ledger-section');
+  if (!rows.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  const sel = document.getElementById('ledger-date-select');
+  sel.innerHTML = '';
+  rows.forEach((r, i) => {
+    const opt = document.createElement('option');
+    opt.value = i; opt.textContent = r.date;
+    sel.appendChild(opt);
+  });
+  sel.selectedIndex = rows.length - 1;
+  sel.onchange = renderLedgerDetail;
+
+  document.getElementById('ledger-latest-btn').onclick = () => {
+    sel.selectedIndex = sel.options.length - 1;
+    renderLedgerDetail();
+  };
+  document.getElementById('p-capital').oninput = renderLedgerDetail;
+  document.getElementById('ledger-csv-btn').onclick = exportCsv;
+  renderLedgerDetail();
+}
+
+function renderLedgerDetail() {
+  const rows = CURRENT_ROWS;
+  const sel = document.getElementById('ledger-date-select');
+  const idx = Number(sel.value);
+  const r = rows[idx];
+  const prevRow = idx > 0 ? rows[idx - 1] : null;
+  const capital = Number(document.getElementById('p-capital').value) || 0;
+  const detail = document.getElementById('ledger-detail');
+
+  const prevLots = new Map();
+  if (prevRow) prevRow.holdings.forEach(h => prevLots.set(h.ticker, lotsFor(h.weight, capital, PRICES[h.ticker] ? PRICES[h.ticker][prevRow.idx] : null)));
+
+  // 2026-07-29新增：訊號參考價欄位——對照同事public/strategy.html的當日持股表(他有
+  // 「訊號參考價」這欄，我們原本沒有)，這檔股票當初進場訊號用的參考價(訊號執行日前一
+  // 交易日收盤價，跟上漲空間算法用同一個基準)，讓使用者能對照「當初憑什麼進場」。
+  const holdingsRows = r.attribution.slice().sort((a, b) => b.weight - a.weight).map(a => {
+    const lots = lotsFor(a.weight, capital, a.priceEnd);
+    const space = (a.target != null && a.priceEnd != null && a.priceEnd > 0) ? ((a.target - a.priceEnd) / a.priceEnd * 100) : null;
+    return `<tr><td><b>${tickerLabel(a.ticker)}</b></td><td class="mono">${fmtPct(a.weight * 100, 2)}</td><td class="mono">${a.priceEnd != null ? a.priceEnd.toLocaleString() : '—'}</td><td class="mono">${a.target != null ? a.target.toLocaleString() : '—'}</td><td class="mono">${space != null ? fmtPct(space) : '—'}</td><td class="mono">${a.referenceClose != null ? a.referenceClose.toLocaleString() : '—'}</td><td class="mono">${lots != null ? lots.toLocaleString() : '—'}</td></tr>`;
+  }).join('');
+
+  // 2026-07-29修正：賣出列原本只顯示成交價，看不出「賣在哪、賺賠多少」，而且成交價是
+  // 拿PRICES(收盤價)重算的，跟策略規則(出場在開盤價執行)對不上——改用sellsToday記錄的
+  // entryPrice/exitPrice(執行時當下就存好的真實開盤價)直接算損益%，賣出列補上「進場價→
+  // 出場價」跟「損益%」兩欄，才回答得出「賣出什麼股票、賣在哪裡、賺賠多少」這個問題。
+  // 2026-07-30新增：買賣表補上「股數」欄位——之前只有當日持股表有算股數，買賣表看不出
+  // 「買進/賣出幾股」，使用者想確認整股(不取整張1,000股，算到單股無條件捨去)這條規則
+  // 有沒有套用在買賣表上。股數算法跟持股表用同一個lotsFor()，買進用買進當時的權重/價格，
+  // 賣出用出場前的權重(drifted weight)跟出場價。
+  // 2026-07-30修正：權重穿越0的當下(不管是不是新訊號觸發)現在就會產生真正的sellsToday
+  // 記錄(見runBacktest()裡isSellCrossing那段)，所以買賣表看到的賣出列，一定是「當天真的
+  // 把部位換回現金」的那一天，不會再有權重0、股數0的空殼賣出列——之前那種「排名擠出當下
+  // 沒紀錄，等幾天後正式從資格池移除才補一筆權重0的賣出」的延遲/失真問題已經在源頭解決，
+  // 不需要再把賣出拆成「可操作」跟「空殼」兩組個別處理。
+  const buySellRows = [
+    ...r.buys.map(b => {
+      const shares = lotsFor(b.weight, capital, b.price);
+      return `<tr><td><span class="tag buy">買進</span></td><td><b>${tickerLabel(b.ticker)}</b></td><td class="mono">${b.price != null ? b.price.toLocaleString() : '—'}</td><td class="mono">${fmtPct(b.weight * 100)}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono">—</td><td>符合調升條件</td></tr>`;
+    }),
+    ...r.sells.map(s => {
+      const pnlPct = (s.entryPrice != null && s.exitPrice != null && s.entryPrice !== 0) ? (s.exitPrice / s.entryPrice - 1) * 100 : null;
+      const priceLabel = (s.entryPrice != null && s.exitPrice != null) ? `${s.entryPrice.toLocaleString()} → ${s.exitPrice.toLocaleString()}` : (s.exitPrice != null ? s.exitPrice.toLocaleString() : '—');
+      const shares = lotsFor(s.weight, capital, s.exitPrice);
+      return `<tr><td><span class="tag sell">賣出</span></td><td><b>${tickerLabel(s.ticker)}</b></td><td class="mono">${priceLabel}</td><td class="mono">${fmtPct(s.weight * 100)}</td><td class="mono">${shares != null ? shares.toLocaleString() : '—'}</td><td class="mono ${pnlPct != null && pnlPct >= 0 ? 'up' : 'down'}" style="color:${pnlPct != null ? (pnlPct >= 0 ? 'var(--up)' : 'var(--down)') : 'inherit'};">${pnlPct != null ? fmtPct(pnlPct) : '—'}</td><td>${s.reason}</td></tr>`;
+    }),
+  ].join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">今日無買賣</td></tr>';
+
+  // 2026-07-29重寫：原本隔夜段/盤中段各自一整套列(同一檔股票出現兩次)，跟上面「當日
+  // 持股」表視覺上很像(都是股票+權重+價格)，使用者掃過去容易覺得「這兩張表是不是在
+  // 講同一件事」。改成同一檔股票合併成一列，隔夜/盤中的報酬跟貢獻各自用獨立欄位並排
+  // 顯示，列數砍半(15檔股票=15列，不是30列)，也讓這張表跟「當日持股」表的差異更明顯：
+  // 那張是「現在持有什麼、目標價多少」，這張是「今天的報酬怎麼來的」。
+  const attrByTicker = new Map();
+  (r.overnightAttribution || []).forEach(a => {
+    attrByTicker.set(a.ticker, { ticker: a.ticker, weight: a.weight, overnightRet: a.ret, overnightContrib: a.contribution });
+  });
+  r.attribution.forEach(a => {
+    const row = attrByTicker.get(a.ticker) || { ticker: a.ticker, weight: a.weight };
+    row.weight = a.weight;
+    row.intradayRet = a.ret;
+    row.intradayContrib = a.contribution;
+    row.isEntryDay = a.isEntryDay;
+    attrByTicker.set(a.ticker, row);
+  });
+  const combinedAttrRows = [...attrByTicker.values()].sort((a, b) => b.weight - a.weight);
+  const retCell = (v) => v != null ? `<td class="mono" style="color:${v >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(v * 100)}</td>` : '<td class="mono" style="color:var(--ink-faint);">—</td>';
+  const attributionRows = combinedAttrRows.map(a => `
+    <tr>
+      <td><b>${tickerLabel(a.ticker)}</b>${a.isEntryDay ? ' <span class="tag buy" style="font-size:9px;">進場日</span>' : ''}</td>
+      <td class="mono">${fmtPct(a.weight * 100)}</td>
+      ${retCell(a.overnightRet)}
+      <td class="mono">${a.overnightContrib != null ? fmtPct(a.overnightContrib * 100) : '—'}</td>
+      ${retCell(a.intradayRet)}
+      <td class="mono">${a.intradayContrib != null ? fmtPct(a.intradayContrib * 100) : '—'}</td>
+      <td class="mono" style="font-weight:700;">${fmtPct(((a.overnightContrib || 0) + (a.intradayContrib || 0)) * 100)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>';
+  // 2026-07-29新增：對照同事public/strategy.html的貢獻合計列(tfoot)——把隔夜段+盤中段
+  // 全部貢獻加總，應該要等於當日總報酬，讓使用者能直接肉眼核對這張表沒有算漏或算重。
+  const contributionTotal = [...(r.overnightAttribution || []), ...r.attribution].reduce((s, a) => s + (a.contribution || 0), 0);
+
+  const totalExposure = r.holdings.reduce((s, h) => s + h.weight, 0) * 100;
+  const flowLabel = r.dailyReturn >= 0 ? '提領' : '補入';
+  const flowVal = Math.abs(r.dailyReturn * 100).toFixed(2);
+
+  detail.innerHTML = `
+    <div class="brief-panel">
+      <div class="brief-eyebrow">Trader Opening Brief</div>
+      <h4>當日開盤操作清單</h4>
+      <div class="brief-line">${r.date}：訊號公布後於下一交易日開盤價執行。</div>
+      <div class="brief-line">實際執行資金 ${capital.toLocaleString()} 元；下表「股數」欄位依當日收盤價換算單股（無條件捨去，不取整張）。</div>
+      ${r.buys.length === 0 && r.sells.length === 0 ? '<div class="brief-line">今日無再平衡交易。</div>' : ''}
+      <div class="brief-formula">整股換算：股數 = floor(目標權重 × 執行資金 ÷ 當日收盤價)，算到單股，不取整張(1張=1,000股)。每日報酬拆成隔夜段(用前一天收盤到當天開盤，套用前一天收盤時的舊權重)+盤中段(用當天開盤到收盤，套用重新配置後的新權重)兩段加總；進場當天沒有隔夜段，出場當天沒有盤中段。</div>
+    </div>
+
+    <div class="card-row" style="grid-template-columns: repeat(4,1fr); margin-bottom:14px;">
+      <div class="stat-card"><div class="label">當日報酬</div><div class="value ${r.dailyReturn >= 0 ? 'up' : 'down'}" style="font-size:18px;">${fmtPct(r.dailyReturn * 100)}</div></div>
+      <div class="stat-card"><div class="label">累積報酬</div><div class="value ${r.cumReturn >= 0 ? 'up' : 'down'}" style="font-size:18px;">${fmtPct(r.cumReturn * 100)}</div></div>
+      <div class="stat-card"><div class="label">市場曝險</div><div class="value" style="font-size:18px;">${totalExposure.toFixed(1)}%</div></div>
+      <div class="stat-card"><div class="label">平帳資金流</div><div class="value ${r.dailyReturn >= 0 ? 'down' : 'up'}" style="font-size:18px;">${flowLabel} ${flowVal}%</div></div>
+    </div>
+
+    <div class="explain-block">
+      <div class="brief-eyebrow">Daily Explanation</div>
+      <h4>這一天如何配置與買賣？</h4>
+      ${buildDailyExplanation(r, prevRow)}
+    </div>
+
+    <div class="two-col-tables">
+      <div class="table-wrap">
+        <table class="book-table">
+          <thead><tr><th>股票</th><th>權重</th><th>收盤</th><th>目標價</th><th>空間</th><th>訊號參考價</th><th>股數</th></tr></thead>
+          <tbody>${holdingsRows || '<tr><td colspan="7" style="color:var(--ink-faint);">目前無持股</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table class="book-table">
+          <thead><tr><th>動作</th><th>股票</th><th>成交價（賣出：進場→出場）</th><th>權重</th><th>股數</th><th>損益</th><th>原因</th></tr></thead>
+          <tbody>${buySellRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="eyebrow-row" style="margin-top:4px;"><span class="eyebrow">Position Return Attribution</span></div>
+    <div class="block-title" style="margin-left:0; font-size:15px;">個股當日報酬明細</div>
+    <p style="font-size:11px; color:var(--ink-faint); margin:-6px 0 10px;">貢獻 = 權重 × 個股區間報酬，隔夜段(前收→開盤，用重新配置前的舊權重)跟盤中段(開盤→收盤，用重新配置後的新權重)分開算，兩欄合計等於當日總報酬。</p>
+    <div class="table-wrap" style="margin-bottom:18px;">
+      <table class="book-table">
+        <thead><tr><th>股票</th><th>權重</th><th>隔夜段報酬</th><th>隔夜段貢獻</th><th>盤中段報酬</th><th>盤中段貢獻</th><th>當日合計貢獻</th></tr></thead>
+        <tbody>${attributionRows}</tbody>
+        <tfoot><tr><td colspan="6" style="text-align:right; font-weight:700;">貢獻合計</td><td class="mono" style="font-weight:700;">${fmtPct(contributionTotal * 100)}</td></tr></tfoot>
+      </table>
+    </div>
+
+    <div class="eyebrow-row"><span class="eyebrow">History</span></div>
+    <div class="block-title" style="margin-left:0; font-size:15px;">每日帳本</div>
+    <details class="table-toggle">
+      <summary>顯示全部 ${rows.length} 個交易日逐日紀錄</summary>
+      <div class="table-wrap" style="margin-top:8px; max-height:520px; overflow-y:auto;">
+        <table class="book-table">
+          <thead><tr><th>日期</th><th>策略當日</th><th>大盤當日</th><th>策略累加</th><th>大盤累加</th><th>曝險</th><th>持股數</th><th>提領/補入</th></tr></thead>
+          <tbody>${rows.slice().reverse().map(rr => {
+            const exposure = rr.exposure * 100;
+            const flow = rr.dailyReturn >= 0 ? `提領 +${(rr.dailyReturn * 100).toFixed(2)}%` : `補入 +${(-rr.dailyReturn * 100).toFixed(2)}%`;
+            return `<tr><td class="mono">${rr.date}</td><td class="mono ${rr.dailyReturn >= 0 ? 'up' : 'down'}" style="color:${rr.dailyReturn >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(rr.dailyReturn * 100)}</td><td class="mono">${fmtPct(rr.taiexReturn * 100)}</td><td class="mono">${fmtPct(rr.cumReturn * 100)}</td><td class="mono">${fmtPct(rr.cumTaiex * 100)}</td><td class="mono">${exposure.toFixed(0)}%</td><td class="mono">${rr.nPositions}</td><td class="mono">${flow}</td></tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+      <p style="font-size:10.5px; color:var(--ink-faint); margin-top:8px;">已顯示完整回測期間全部交易日(表格內可捲動)；若要做進一步分析，也可用「匯出每日 CSV」。</p>
+    </details>`;
+}
+
+function exportCsv() {
+  // 2026-07-28修正：對照同事public/strategy.js的exportDaily()，他的CSV有exposure(曝險)、
+  // cashWeight(閒置現金%)、settlementFlow(平帳資金流)、benchmarkPriceCumulative(加權指數
+  // 點位漲幅，複利式，不同於我們一直用的算術每日相加)這四欄，我們原本沒匯出——這些數值
+  // 我們自己內部其實都已經算得出來，只是沒放進CSV，這裡補上，同時保留我們原本多出來的
+  // 超額報酬跟持股清單明細欄位。
+  const rows = CURRENT_ROWS;
+  if (!rows.length) return;
+  const taiexBase = TAIEX[rows[0].idx];
+  const header = ['日期', '策略當日報酬', '大盤當日報酬', '策略累積報酬', '大盤累積報酬', '大盤指數點位累積漲幅', '超額報酬', '曝險', '閒置現金比例', '平帳資金流', '持股數', '持股清單(代號 名稱:weight%)'];
+  const lines = [header.join(',')];
+  rows.forEach(r => {
+    const holdingsStr = r.holdings.map(h => `${tickerLabel(h.ticker)}:${(h.weight * 100).toFixed(2)}`).join(';');
+    const exposure = r.exposure;
+    const benchmarkPriceCumulative = (taiexBase != null && TAIEX[r.idx] != null) ? (TAIEX[r.idx] / taiexBase - 1) : null;
+    lines.push([
+      r.date,
+      (r.dailyReturn * 100).toFixed(4),
+      (r.taiexReturn * 100).toFixed(4),
+      (r.cumReturn * 100).toFixed(4),
+      (r.cumTaiex * 100).toFixed(4),
+      benchmarkPriceCumulative != null ? (benchmarkPriceCumulative * 100).toFixed(4) : '',
+      (r.excess * 100).toFixed(4),
+      (exposure * 100).toFixed(4),
+      ((1 - exposure) * 100).toFixed(4),
+      (-r.dailyReturn * 100).toFixed(4),
+      r.nPositions,
+      `"${holdingsStr}"`,
+    ].join(','));
+  });
+  const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `strategy_daily_book_${rows[0].date}_${rows[rows.length - 1].date}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// 執行單次回測並更新整個上半部(卡片/涵蓋度/曲線/帳本)
+// ============================================================================
+function runAndRenderManual(bestExcessInfo) {
+  const p = readParams();
+  const start = document.getElementById('p-start').value;
+  const end = document.getElementById('p-end').value;
+  const result = runBacktest(p, start, end);
+  const { rows, summary, trades } = result;
+  renderCards(summary, bestExcessInfo || LAST_BEST_EXCESS, rows);
+  renderCoverage();
+  renderCurve(rows);
+  renderExcessCurve(rows);
+  renderLedger(rows);
+  renderTrackRecord(trades);
+  const rollingWindows = computeRollingWindows(p);
+  renderRollingChart(document.getElementById('rolling-summary-holder'), document.getElementById('rolling-chart-holder'), rollingWindows);
+  return { rows, summary };
+}
+
+document.getElementById('run-btn').addEventListener('click', () => runAndRenderManual());
+
+// 2026-07-29新增：原本只有按「執行回測」才會重跑，改參數(不管是滑桿數字、下拉選單、
+// 配置方式、出場規則)之後，上面的hero卡片/報酬曲線/超額曲線/每日帳本全部維持改參數
+// 之前的舊結果，看起來像是「調整了卻沒反應」、「帳本沒有更動」——不是帳本本身壞掉，
+// 是整個右側結果區塊本來就要手動點按鈕才會重算。改成：param-panel裡任何欄位一有
+// 變動，就debounce後自動重新執行回測，所有版塊(hero/曲線/帳本)才會一起跟著更新，
+// 不用每次都手動點「執行回測」。p-capital(執行資金)例外——它只影響帳本的股數換算，
+// 不影響回測本身的權重/報酬，本來就有自己專屬的oninput只重繪帳本明細，不需要also
+// 觸發整個回測重算。年/月/日的日期下拉也算在內，一起自動重跑。
+let autoRunTimer = null;
+function scheduleAutoRun() {
+  clearTimeout(autoRunTimer);
+  autoRunTimer = setTimeout(() => runAndRenderManual(), 400);
+}
+// 2026-07-30新增：淺色/深色切換——按一下在light/dark之間切換，選擇存進localStorage，
+// 下次開頁面(含另一個網站strategy.html/index.html，兩邊都用同一個localStorage
+// key「theme-pref」)會直接套用，不用每次都重選。
+document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('theme-pref', next);
+});
+
+document.getElementById('param-panel').addEventListener('input', (evt) => {
+  if (evt.target.id === 'p-capital') return;
+  scheduleAutoRun();
+});
+document.getElementById('param-panel').addEventListener('change', (evt) => {
+  if (evt.target.id === 'p-capital') return;
+  scheduleAutoRun();
+});
+
+// ============================================================================
+// 日期改成年/月/日三個獨立下拉選單，可以直接點開選、不用每次都點日曆——
+// #p-start/#p-end還是維持原本的ISO字串(給readParams()等既有邏輯讀)，
+// 只是從type=date改成hidden，靠三個select同步寫入。
+// ============================================================================
+// 2026-07-29新增：concept_map資料載入後才知道有哪些產業/主題可選，所以這個函式在
+// loadAll()抓完concept_map後才呼叫，不是像populateDateYMD那樣頁面一開就能填。
+// 2026-07-29改成可複選：原本單選<select>沒辦法同時選「半導體+通訊網路」這種組合，
+// 改成checkbox面板，dimension分組(主題/官方產業鏈)、同組內按檔數由大到小排序。
+let SELECTED_CONCEPTS = new Set();
+function populateConceptSelect(conceptsByDim) {
+  const panel = document.getElementById('concept-panel');
+  const dimLabel = { theme: '主題', value_chain: '官方產業鏈' };
+  const dimOrder = ['theme', 'value_chain'];
+  panel.innerHTML = '';
+  for (const dim of dimOrder) {
+    const concepts = conceptsByDim.get(dim);
+    if (!concepts || !concepts.size) continue;
+    const groupLabel = document.createElement('div');
+    groupLabel.className = 'ms-group-label';
+    groupLabel.textContent = dimLabel[dim] || dim;
+    panel.appendChild(groupLabel);
+    [...concepts]
+      .map(c => ({ name: c, key: `${dim}::${c}` }))
+      .sort((a, b) => (CONCEPT_TICKERS.get(b.key)?.size || 0) - (CONCEPT_TICKERS.get(a.key)?.size || 0))
+      .forEach(({ name, key }) => {
+        const label = document.createElement('label');
+        label.innerHTML = `<input type="checkbox" value="${key}"/> ${name}（${CONCEPT_TICKERS.get(key).size}檔）`;
+        panel.appendChild(label);
+      });
+  }
+}
+
+function updateConceptTrigger() {
+  const trigger = document.getElementById('concept-trigger');
+  if (SELECTED_CONCEPTS.size === 0) { trigger.textContent = '不限（全部216檔）'; return; }
+  const names = [...SELECTED_CONCEPTS].map(key => key.split('::')[1]);
+  const unionCount = new Set(names.flatMap(n => {
+    const key = [...SELECTED_CONCEPTS].find(k => k.endsWith(`::${n}`));
+    return key ? [...(CONCEPT_TICKERS.get(key) || [])] : [];
+  })).size;
+  trigger.textContent = names.length <= 2 ? `${names.join('、')}（${unionCount}檔）` : `已選 ${names.length} 個分類（${unionCount}檔）`;
+}
+
+document.getElementById('concept-trigger').addEventListener('click', (evt) => {
+  evt.stopPropagation();
+  document.getElementById('concept-panel').classList.toggle('open');
+});
+document.getElementById('concept-panel').addEventListener('click', (evt) => {
+  const cb = evt.target.closest('input[type="checkbox"]');
+  if (!cb) return;
+  if (cb.checked) SELECTED_CONCEPTS.add(cb.value); else SELECTED_CONCEPTS.delete(cb.value);
+  updateConceptTrigger();
+});
+document.addEventListener('click', (evt) => {
+  const ms = document.getElementById('concept-multiselect');
+  if (ms && !ms.contains(evt.target)) document.getElementById('concept-panel').classList.remove('open');
+});
+
+function populateDateYMD(prefix, defaultISO) {
+  const [dy, dm, dd] = defaultISO.split('-').map(Number);
+  const ySel = document.getElementById(`p-${prefix}-y`);
+  const mSel = document.getElementById(`p-${prefix}-m`);
+  const dSel = document.getElementById(`p-${prefix}-d`);
+  const thisYear = new Date().getFullYear();
+  for (let y = 2021; y <= thisYear + 1; y++) {
+    const opt = document.createElement('option');
+    opt.value = String(y); opt.textContent = `${y}年`;
+    if (y === dy) opt.selected = true;
+    ySel.appendChild(opt);
+  }
+  for (let m = 1; m <= 12; m++) {
+    const opt = document.createElement('option');
+    opt.value = String(m); opt.textContent = `${m}月`;
+    if (m === dm) opt.selected = true;
+    mSel.appendChild(opt);
+  }
+  for (let d = 1; d <= 31; d++) {
+    const opt = document.createElement('option');
+    opt.value = String(d); opt.textContent = `${d}日`;
+    if (d === dd) opt.selected = true;
+    dSel.appendChild(opt);
+  }
+  const sync = () => {
+    const y = ySel.value, m = mSel.value.padStart(2, '0'), d = dSel.value.padStart(2, '0');
+    document.getElementById(`p-${prefix}`).value = `${y}-${m}-${d}`;
+  };
+  [ySel, mSel, dSel].forEach(el => el.addEventListener('change', sync));
+  sync();
+}
+populateDateYMD('start', document.getElementById('p-start').value);
+populateDateYMD('end', document.getElementById('p-end').value);
+
+// 其他地方(日期快捷鍵按鈕/優化器一鍵套用建議參數)改寫p-start/p-end時，要透過這個函式，
+// 年/月/日下拉選單才會跟著同步，不然選單畫面會停在舊值。
+function setDateField(prefix, iso) {
+  document.getElementById(`p-${prefix}`).value = iso;
+  const [y, m, d] = iso.split('-').map(Number);
+  document.getElementById(`p-${prefix}-y`).value = String(y);
+  document.getElementById(`p-${prefix}-m`).value = String(m);
+  document.getElementById(`p-${prefix}-d`).value = String(d);
+}
+
+// 日期快捷鍵：不用每次都點日曆挑日期，常用區間(全部/訓練/驗證/測試/近1年)一鍵套用並直接重跑。
+document.getElementById('date-presets').addEventListener('click', (evt) => {
+  const btn = evt.target.closest('button[data-preset]');
+  if (!btn) return;
+  const lastDate = DATES.length ? DATES[DATES.length - 1] : new Date().toISOString().slice(0, 10);
+  const ranges = {
+    all: ['2023-01-01', lastDate],
+    train: ['2023-01-01', '2024-12-31'],
+    valid: ['2025-01-01', '2025-12-31'],
+    test: ['2026-01-01', lastDate],
+    '1y': [new Date(new Date(lastDate).getTime() - 365 * 86400000).toISOString().slice(0, 10), lastDate],
+  };
+  const [s, e] = ranges[btn.dataset.preset];
+  setDateField('start', s);
+  setDateField('end', e);
+  document.querySelectorAll('#date-presets button').forEach(b => b.classList.toggle('active', b === btn));
+  runAndRenderManual();
+});
+
+// ============================================================================
+// 參數搜尋 — 選參流程(訓練→驗證→驗證→測試 / 粗搜→細調)+候選產生方式，全部逐項對照
+// 同事optimizer.js跟explorer.js複製，包含候選值本身也用他審過的固定離散網格，不再用
+// 隨機取樣(2026-07-28最終定案：曾經改成寬範圍隨機取樣，但發現這樣統計上難以取樣到他
+// 刻意選定的角落、也可能取到不合理的極端參數，改回跟他完全一致的固定網格)。
+// ============================================================================
+
+// --- 共用：把summary換算成單一排序分數，超額報酬為主，Sharpe/回撤做微幅風險調整 ---
+// optimizer.js版本係數(0.03/0.10)：rankValue=excess+clip(sharpe,-3,3)*0.03+maxDD*0.10
+function rankValueOptimizer(summary) {
+  if (!summary) return -Infinity;
+  const excess = summary.excessReturnPct / 100;
+  const sharpe = Math.min(3, Math.max(-3, summary.sharpe || 0));
+  const maxDD = summary.maxDrawdownPct / 100;
+  return excess + sharpe * 0.03 + maxDD * 0.10;
+}
+// explorer.js版本係數(0.02/0.05)、sharpe只有上限沒有下限：value=excess+.02*min(3,sharpe)+.05*maxDD
+function rankValueExplorer(summary) {
+  if (!summary) return -Infinity;
+  const excess = summary.excessReturnPct / 100;
+  const sharpe = Math.min(3, summary.sharpe || 0);
+  const maxDD = summary.maxDrawdownPct / 100;
+  return excess + sharpe * 0.02 + maxDD * 0.05;
+}
+
+function paramSummaryLabel(p) {
+  const avgLabel = p.avgRule === 'tier3' ? `高於平均加碼×${p.avgBoostMult}` : '不使用平均加碼';
+  return `調升 ≥ +${p.minUpgradePct.toFixed(2)}% · 分析師 ≥ ${p.minAnalystCount} · 上漲空間 ≥ ${(p.minUpside * 100).toFixed(2)}% · 前 ${p.maxPositions || '不限'} 檔 · 持有 ${p.maxHoldDays} 日 · ${sizingLabelMap[p.sizingMode]} · ${avgLabel}`;
+}
+
+function renderSearchProgress(container, done, total, stageLabel) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  container.innerHTML = `
+    <div class="empty-state" style="padding:20px;">
+      ${stageLabel || '搜尋中'}… ${done}/${total} 組 (${pct}%)
+      <div style="height:6px; background:var(--border); border-radius:3px; margin-top:10px; overflow:hidden;">
+        <div style="height:100%; width:${pct}%; background:var(--accent); transition:width .15s;"></div>
+      </div>
+    </div>`;
+}
+
+// 2026-08-01改寫：欄位從「單一區間的summary」(總報酬/Sharpe/回撤/交易數)換成滾動
+// walk-forward的樣本外統計(勝率/平均每段超額報酬/驗證段數)，因為排序依據已經改成
+// rollingScore，欄位要跟著顯示真正決定排名的數字，不能繼續show一個跟排序無關的
+// 單一區間總報酬(那樣使用者會看不懂「為什麼這組排第一，數字卻不是最高」)。
+function renderGridTable(container, results) {
+  if (!results.length) { container.innerHTML = '<div class="empty-state" style="padding:20px;">這段區間找不到有效參數組合。</div>'; return; }
+  const top = results.slice(0, 10);
+  const rowsHtml = top.map((r, i) => `
+    <tr class="grid-result-row${i === 0 ? ' best' : ''}">
+      <td class="mono">${i + 1}</td>
+      <td style="font-size:11.5px;">${paramSummaryLabel(r.params)}</td>
+      <td class="mono" style="color:${r.winRate >= 50 ? 'var(--up)' : 'var(--down)'};">${r.winRate.toFixed(1)}%</td>
+      <td class="mono" style="color:${r.avgExcess >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(r.avgExcess)}</td>
+      <td class="mono">${r.nWindows}段</td>
+    </tr>`).join('');
+  container.innerHTML = `
+    <div class="table-wrap">
+      <table class="book-table">
+        <thead><tr><th>#</th><th>參數組合</th><th>樣本外勝率</th><th>平均每段超額</th><th>驗證段數</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+
+function applyParamsToForm(p) {
+  document.getElementById('p-minUpgrade').value = p.minUpgradePct;
+  document.getElementById('p-minAnalyst').value = p.minAnalystCount;
+  document.getElementById('p-minUpside').value = p.minUpside * 100;
+  document.getElementById('p-maxWeight').value = p.maxWeightPerStock * 100;
+  document.getElementById('p-maxHold').value = p.maxHoldDays;
+  document.getElementById('p-maxPositions').value = p.maxPositions;
+  document.getElementById('p-maxExposure').value = p.maxPortfolioExposure * 100;
+  document.getElementById('p-sizing').value = p.sizingMode;
+  document.getElementById('p-avgRule').value = p.avgRule;
+  document.getElementById('p-avgBoost').value = p.avgBoostMult;
+  document.getElementById('composite-params').style.display = p.sizingMode === 'composite' ? '' : 'none';
+}
+
+let LAST_BEST_EXCESS = null;
+let LAST_RUN_SUMMARY = null;
+
+// ----------------------------------------------------------------------------
+// Out-of-Sample Optimization：選參流程+候選產生方式改回完全對照同事optimizer.js的
+// buildCandidates()——固定離散網格(不是隨機取樣)：
+// 調升幅度∈[0%,3%,6%] × 分析師∈[1位,3位] × 上漲空間∈[0%,5%] × 配置法∈[原始綜合分數,Enhanced]
+// × 持有天數∈[10日,20日] × 最大持股∈[0(不限),5,10,20]，共3×2×2×2×2×4=192組，跟他192組
+// 候選數字剛好對上(不是巧合，是同一份網格)。固定單檔上限20%、調降/達標都出場(他的方法
+// 定義的行為，不是門檻，不開放)。改用他這套「候選本身就從業務常識篩過」的離散網格，
+// 而不是之前的寬範圍隨機取樣——之前的隨機取樣會抽到「分析師門檻25位」這種實務上幾乎
+// 篩不到任何訊號的極端值，選出低曝險、不具代表性的參數(2026真複利超額報酬實測-23.66%，
+// 詳見git log)。兩段walk-forward流程不變：先用2023訓練→2024驗證排名，取前24名進第二輪，
+// 用2023-2024訓練→2025驗證再排名一次，兩輪分數加權平均選出最終參數；2026保留期只在
+// 最後套用一次、不參與選參數。
+// ----------------------------------------------------------------------------
+function buildOptimizerCandidates(baseParams) {
+  const rows = [];
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const sizingMode of ['composite', 'enhanced']) {
+          for (const maxHoldDays of [10, 20]) {
+            for (const maxPositions of [0, 5, 10, 20]) {
+              rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+            }
+          }
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+// 2026-07-29新增：「全模型搜尋」專用的延伸候選網格——跟buildOptimizerCandidates用一樣
+// 的門檻/持有天數/持股數網格，唯一差異是配置方式多開放equal(等權)、by_upgrade(調升
+// 幅度加權)這兩個同事自己的優化器從來不測試的選項(他optimizer.js的buildCandidates()
+// 寫死allocation∈['score','enhanced'])。這是我們自己的延伸搜尋，候選數變成384組
+// (3×2×2×4×2×4)，不再是跟同事192組完全對上的原始版本，所以獨立成另一個區塊，
+// 不動原本已經驗證過候選數精確吻合的「參數自動最佳化」。
+// 2026-08-01擴充(experiment分支)：把停損%／分批停利比例也納入搜尋網格，之前這兩個
+// 新參數固定沿用表單原值，優化器根本沒機會去比較「開/關/不同強度」的風控設定哪個
+// 好——這兩個已經是驗證過的有效槓桿(停損上線main，分批停利在experiment)，理應讓
+// 優化器一起搜，不是永遠鎖死同一個值。分批停利門檻固定70%(已驗證的甜蜜點)，只搜
+// 比例，避免網格再乘一個維度、運算量爆炸；3×3=9倍候選數(384→3456)，靠rolling
+// 二階段的24組shortlist篩選不受影響，運算量增加主要在第一輪快篩，仍在可接受範圍。
+function buildExtendedOptimizerCandidates(baseParams) {
+  const rows = [];
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const sizingMode of ['equal', 'by_upgrade', 'composite', 'enhanced']) {
+          for (const maxHoldDays of [10, 20]) {
+            for (const maxPositions of [0, 5, 10, 20]) {
+              for (const stopLossPct of [0, 10, 20]) {
+                for (const partialTakeFraction of [0, 0.3, 0.5]) {
+                  rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none', stopLossPct, partialTakeThresholdPct: 70, partialTakeFraction });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+async function runTwoFoldOptimizationAsync(baseParams, endDate, onProgress, candidateBuilder) {
+  // 2026-07-28修正：每一段(訓練/驗證/測試)都用buildFoldEvUp()複製同事140天緩衝的
+  // 「二分搜尋鎖底」行為(見computeRevisionHistory的詳細說明)。第一次嘗試(單純把緩衝
+  // 之前的文章直接濾掉不用)方向錯誤、實測讓驗證期落差惡化，根因是同事的二分搜尋沒有
+  // 真的丟棄舊文章，是把它們全部鎖到緩衝第一天、讓它們互相碰撞只留最晚發布的一篇——
+  // 這次改用floorIdx鎖底(Math.max(idx,floorIdx))重現，不是直接filter掉。
+  const evUp2023 = buildFoldEvUp('2023-01-01');
+  const evUp2024 = buildFoldEvUp('2024-01-01');
+  const evUp2026 = buildFoldEvUp('2026-01-01');
+
+  // 2026-08-01重寫(experiment分支)：第二輪原本只用「2023-2024訓練→2025驗證」單一一段
+  // 驗證做最終選擇，樣本只有2次獨立切段，容易過度配適(這幾天已經實測過一次：優化器
+  // 選出的組合在全期間表現遠差於手動設定的官方推薦參數)。改成對每個候選跑完整滾動
+  // walk-forward(computeRollingWindows()，12個月訓練/3個月驗證，滾動切過2023-2026全部
+  // 資料)，用「樣本外勝率為主、平均超額報酬為輔」的分數選出最終參數(rollingScore =
+  // winRate + avgExcess*10，win rate每1pp的權重約等於avgExcess每0.1pp，呼應這幾天
+  // 驗證出來的「穩定度優先、但可以合理換取報酬率」原則)。第一輪快篩(2023訓練→2024
+  // 驗證)維持不變，只是用來把384組候選先篩到24組、控制運算量，不是過度配適的根因。
+  const candidates = (candidateBuilder || buildOptimizerCandidates)(baseParams);
+  const fold1 = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const p = candidates[i];
+    const train2023 = runBacktest(p, '2023-01-01', '2023-12-31', evUp2023).summary;
+    const validate2024 = runBacktest(p, '2024-01-01', '2024-12-31', evUp2024).summary;
+    fold1.push({ params: p, train2023, validate2024, score: rankValueOptimizer(validate2024) + rankValueOptimizer(train2023) * 0.25 });
+    if (i % 8 === 7 && onProgress) { onProgress(i + 1, candidates.length + 24 * 11, '第一輪快篩(2023訓練→2024驗證)'); await new Promise(r => setTimeout(r, 0)); }
+  }
+  fold1.sort((a, b) => b.score - a.score);
+  const shortlisted = fold1.slice(0, 24);
+
+  const fold2 = [];
+  let doneCount = candidates.length;
+  for (let i = 0; i < shortlisted.length; i++) {
+    const fold = shortlisted[i];
+    const rollingWindows = computeRollingWindows(fold.params);
+    const excesses = rollingWindows.map(w => w.excess).filter(v => v != null);
+    const avgExcess = excesses.length ? excesses.reduce((a, b) => a + b, 0) / excesses.length : -Infinity;
+    const winRate = excesses.length ? excesses.filter(v => v > 0).length / excesses.length * 100 : 0;
+    const rollingScore = winRate + avgExcess * 10;
+    fold2.push({ params: fold.params, train2023: fold.train2023, validate2024: fold.validate2024, rollingWindows, avgExcess, winRate, nWindows: excesses.length, rollingScore });
+    doneCount += (rollingWindows.length || 11);
+    if (onProgress) { onProgress(doneCount, candidates.length + shortlisted.length * 11, `第二輪滾動驗證(${i + 1}/${shortlisted.length})`); await new Promise(r => setTimeout(r, 0)); }
+  }
+  fold2.sort((a, b) => b.rollingScore - a.rollingScore);
+  const selected = fold2[0];
+  const test = runBacktest(selected.params, '2026-01-01', endDate, evUp2026).summary;
+  const full = runBacktest(selected.params, '2023-01-01', endDate, evUp2023).summary;
+  return {
+    candidateCount: candidates.length,
+    selected, test, full,
+    shortlist: fold2,
+  };
+}
+
+// 2026-07-29重寫：原本「參數自動最佳化」跟「全模型搜尋」是兩個外觀幾乎一樣的獨立
+// 區塊(同樣的標題排版、同樣的推薦卡片、同樣的穩定度檢查)，使用者反映看起來像是
+// 同一個功能做了兩次。改成合併成一個區塊，用radio切換「候選範圍」：跟同事對照
+// (192組，驗證過的對照基準)或全模型延伸(384組，我們自己多測equal/調升幅度加權)，
+// 共用同一組DOM id、同一個按鈕，只有candidateBuilder跟文案隨模式切換，不是兩份
+// 幾乎一樣的程式碼各自維護。
+//
+// 2026-07-28原註：抽成獨立函式讓init()也能呼叫並拿到選定參數——原本頁面一打開，
+// 主畫面顯示的是表單上寫死的手動預設值，兩段walk-forward選出來的真正驗證過的參數
+// 只會顯示在下方卡片裡，要手動點「套用全期間」才會反映到主畫面，容易讓人誤以為
+// 首頁看到的數字就是最佳結果。改成頁面載入時自動把選定參數套回表單、重跑主畫面。
+// 2026-07-30簡化：原本用radio切換「192組(僅2種配置方式)」跟「384組(全部4種配置方式)」
+// 兩種搜尋範圍，使用者反映兩者選出來的最終參數實際上經常一樣(4種配置方式互相比較後，
+// 表現最好的那個本來就會贏)，多一個選項只是徒增介面複雜度、沒有實質差異，改成固定只
+// 用涵蓋全部4種配置方式的搜尋範圍，不用使用者自己選。
+async function runStrictSearchAndRender() {
+  const isExtended = true;
+  const btn = document.getElementById('strict-search-btn');
+  const base = readParams();
+  const testEnd = document.getElementById('p-end').value;
+  const out = document.getElementById('strict-result');
+  const candidateBuilder = buildExtendedOptimizerCandidates;
+  const totalCandidates = candidateBuilder(base).length;
+  btn.disabled = true;
+  renderSearchProgress(out, 0, totalCandidates + 24, '搜尋中');
+  const result = await runTwoFoldOptimizationAsync(base, testEnd, (done, total, stage) => renderSearchProgress(out, done, total, stage), candidateBuilder);
+  btn.disabled = false;
+
+  const { selected, test, full } = result;
+  LAST_BEST_EXCESS = { excess: full ? full.excessReturnPct : null, sub: `滾動walk-forward選定參數套用全期間` };
+
+  // 2026-08-01改寫：過擬合檢查改用樣本外勝率(不是單一段驗證期超額報酬)——勝率低於
+  // 50%代表這組參數連過半數的獨立樣本外驗證段都打不贏大盤，比舊版「驗證期一段轉負」
+  // 的判斷標準更穩健(11段獨立驗證，不是1段)。
+  const isOverfit = selected.winRate < 50;
+  const badgeClass = isOverfit ? 'caution' : 'safe';
+  const badgeText = isOverfit ? '樣本外勝率不到五成，穩定度存疑' : '樣本外驗證通過';
+
+  out.innerHTML = '';
+  const recGrid = document.createElement('div');
+  recGrid.className = 'recommend-grid';
+  recGrid.innerHTML = `
+    <div class="recommend-card">
+      <h4>滾動walk-forward選定參數 <span class="pill-badge ${badgeClass}">${badgeText}</span></h4>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="label">樣本外滾動勝率</div><div class="value ${selected.winRate >= 50 ? 'up' : 'down'}">${selected.winRate.toFixed(1)}%</div><div class="sub">${selected.nWindows}段獨立驗證中打贏大盤的比例</div></div>
+        <div class="mini-stat"><div class="label">平均每段超額報酬</div><div class="value ${selected.avgExcess >= 0 ? 'up' : 'down'}">${fmtPct(selected.avgExcess)}</div><div class="sub">12個月訓練→3個月驗證，逐段滾動</div></div>
+        <div class="mini-stat"><div class="label">2026 最終測試策略報酬</div><div class="value ${test && test.totalReturnPct >= 0 ? 'up' : 'down'}">${fmtPct(test?.totalReturnPct)}</div><div class="sub">大盤 ${fmtPct(test?.totalTaiexReturnPct)} · 超額 ${fmtPct(test?.excessReturnPct)}</div></div>
+      </div>
+      <div class="param-summary-line">${paramSummaryLabel(selected.params)}</div>
+      <div class="recommend-actions">
+        <button class="btn secondary small" id="btn-rec-test">只看 2026 最終測試</button>
+        <button class="btn secondary small" id="btn-rec-full">套用全期間</button>
+      </div>
+    </div>`;
+  out.appendChild(recGrid);
+
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'disclaimer-bar';
+  const candidateNote = `${totalCandidates}組候選(涵蓋全部4種配置方式)`;
+  disclaimer.textContent = isOverfit
+    ? `${candidateNote}先用2023訓練→2024驗證快篩到24組，再對每組跑完整滾動walk-forward(12個月訓練/3個月驗證，逐段滾動)，但這組結果樣本外勝率不到五成，代表很可能只是配適到雜訊，不建議直接採用。2026保留期只揭露一次結果，不會回頭影響推薦參數。`
+    : `${candidateNote}先用2023訓練→2024驗證快篩到24組，再對每組跑完整滾動walk-forward(12個月訓練/3個月驗證，逐段滾動)選出樣本外勝率+平均超額報酬綜合最佳的參數，比單一驗證段更不容易過度配適。2026 保留期只揭露一次結果，不會回頭影響推薦參數。若保留期表現不佳，應視為策略失效證據，而不是再次調參。`;
+  out.appendChild(disclaimer);
+
+  const trainTableWrap = document.createElement('details');
+  trainTableWrap.className = 'table-toggle';
+  trainTableWrap.style.marginTop = '16px';
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = `顯示第二輪前24名候選(依選定分數排序)`;
+  trainTableWrap.appendChild(summaryEl);
+  const trainTable = document.createElement('div');
+  trainTable.style.marginTop = '8px';
+  trainTableWrap.appendChild(trainTable);
+  renderGridTable(trainTable, result.shortlist);
+  out.appendChild(trainTableWrap);
+
+  // 2026-07-29新增：優化器選出的參數，之前完全沒有跟「參數穩定度分析」接起來——
+  // 使用者按「套用全期間」前，看不到這組被選中的參數是不是也站在懸崖邊的局部尖峰
+  // (就像之前發現「持股數=5」那次一樣)。這裡自動用選定參數(套用全期間的那組日期
+  // 範圍)跑一次同樣的穩定度分析，摘要卡片一律顯示，完整6張圖表收合在底下，
+  // 才是真正把「最佳化」跟「穩定度檢查」接成一個完整迴圈，不是兩個互不相干的功能。
+  const stabilityWrap = document.createElement('div');
+  stabilityWrap.style.marginTop = '16px';
+  stabilityWrap.innerHTML = `<p style="font-size:12px; color:var(--ink-faint); margin-bottom:8px;">正在檢查這組推薦參數的穩定度…</p>`;
+  out.appendChild(stabilityWrap);
+  runSensitivityAnalysisAsync(selected.params, '2023-01-01', testEnd).then(({ baseRun: sBaseRun, results: sResults }) => {
+    const ranked = Object.entries(sResults).map(([k, cfg]) => [k, sensitivityAnalyze(cfg)]).sort((a, b) => b[1].worstNeighborDrop - a[1].worstNeighborDrop);
+    const mostFragile = ranked[0];
+    const isFragile = mostFragile[1].worstNeighborDrop > 40;
+    stabilityWrap.innerHTML = `
+      <div class="disclaimer-bar" style="${isFragile ? '' : 'background:var(--safe-dim); color:var(--safe-ink);'}">
+        <b>${isFragile ? '⚠ 穩定度檢查：' : '✓ 穩定度檢查：'}</b>
+        「${SENSITIVITY_SWEEPS[mostFragile[0]].label}」鄰近設定落差 ${mostFragile[1].worstNeighborDrop.toFixed(0)}pp
+        ${isFragile ? '——這組推薦參數對這個參數很敏感，可能是局部尖峰，套用前建議先看完整分析' : '，在測試範圍內相對穩健，不是站在懸崖邊的局部尖峰'}。
+      </div>
+      <details class="table-toggle" style="margin-top:8px;"><summary>顯示完整穩定度分析(6個參數)</summary><div class="stability-detail" style="margin-top:10px;"></div></details>`;
+    renderSensitivityResult(stabilityWrap.querySelector('.stability-detail'), sBaseRun, sResults);
+  });
+
+  document.getElementById('btn-rec-full').onclick = () => {
+    applyParamsToForm(selected.params);
+    setDateField('start', '2023-01-01');
+    setDateField('end', testEnd);
+    runAndRenderManual(LAST_BEST_EXCESS);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  document.getElementById('btn-rec-test').onclick = () => {
+    applyParamsToForm(selected.params);
+    setDateField('start', '2026-01-01');
+    setDateField('end', testEnd);
+    runAndRenderManual(LAST_BEST_EXCESS);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // 2026-07-29新增：搜尋跑完(不管是頁面載入自動跑、按「重新執行搜尋」、或切換候選範圍
+  // radio)，左側參數欄位自動同步成這次選定的參數、日期範圍設回全期間，不用再手動點
+  // 「套用全期間」——現在候選網格是固定離散網格(不是隨機取樣)，跟同事192組候選驗證過
+  // 完全對上，選出來的結果穩定可信，不會像早期隨機取樣版本那樣結果忽好忽壞、需要
+  // 使用者自己判斷要不要套用。「套用全期間」/「只看2026最終測試」兩個按鈕還是保留，
+  // 讓使用者可以切換想看哪一段期間，不用重跑一次搜尋。
+  applyParamsToForm(selected.params);
+  setDateField('start', '2023-01-01');
+  setDateField('end', testEnd);
+  // 2026-08-01修正(重新套用先前發現過的bug修正——git checkout 144fede時被一併revert掉)：
+  // 這裡呼叫runAndRenderManual()之前沒有接住回傳值更新LAST_RUN_SUMMARY，導致這個全域
+  // 變數停在套用新參數「之前」的舊結果；下面原本的renderCards(LAST_RUN_SUMMARY, ...)
+  // 又用這個過期的全域變數重繪一次卡片，把剛畫好的正確結果蓋回舊的。改成接住回傳值，
+  // 移除這行多餘且會蓋掉正確結果的重複renderCards()呼叫。
+  const { summary: freshSummary } = runAndRenderManual(LAST_BEST_EXCESS);
+  LAST_RUN_SUMMARY = freshSummary;
+
+  return { selected, testEnd, isOverfit };
+}
+
+document.getElementById('strict-search-btn').addEventListener('click', () => { runStrictSearchAndRender(); });
+
+// ----------------------------------------------------------------------------
+// In-Sample Exploration：選參流程+候選產生方式完全對照同事explorer.js的exploreExecution()
+// (粗搜→取前8名→細調)——固定離散網格，不是隨機取樣：
+// 144組粗搜：配置法∈[原始綜合分數,Enhanced]×最大持股∈[3,5,10,20]×單檔上限∈[20%,30%,50%]×
+// 持有天數∈[10,20,40]日×達標出場∈[是,否]，固定調降出場=是、調升≥3%、分析師≥1、上漲空間≥0%。
+// 直接用2023至今全期績效排名，取前8名；每個再細調24組(3×2×2×2)：調升幅度∈[0,3%,6%]×
+// 分析師∈[1,3]位×上漲空間∈[0,5%]×調降出場∈[是,否]。全部候選(含重複快取去重)一起排名，
+// 取分數最高者。這個功能全程用2023-01-01當起始日(對照explorer.js的period寫死不分段)，
+// 不受140天分段緩衝限制影響，不用像優化器那樣另外處理buildFoldEvUp。
+// ----------------------------------------------------------------------------
+function candidateKey(p) {
+  return [p.sizingMode, p.maxPositions, p.maxWeightPerStock, p.maxHoldDays, p.exitOnTarget, p.exitOnDown, p.minUpgradePct, p.minAnalystCount, p.minUpside].join('|');
+}
+function buildExploreBaseCandidates(baseParams) {
+  const rows = [];
+  for (const sizingMode of ['composite', 'enhanced']) {
+    for (const maxPositions of [3, 5, 10, 20]) {
+      for (const maxWeightPerStock of [0.2, 0.3, 0.5]) {
+        for (const maxHoldDays of [10, 20, 40]) {
+          for (const exitOnTarget of [true, false]) {
+            rows.push({ ...baseParams, sizingMode, maxPositions, maxWeightPerStock, maxHoldDays, exitOnTarget, exitOnDown: true, minUpgradePct: 3, minAnalystCount: 1, minUpside: 0, avgRule: 'none' });
+          }
+        }
+      }
+    }
+  }
+  return rows;
+}
+function refineExploreCandidates(base) {
+  const rows = [];
+  for (const minUpgradePct of [0, 3, 6]) {
+    for (const minAnalystCount of [1, 3]) {
+      for (const minUpside of [0, 0.05]) {
+        for (const exitOnDown of [true, false]) {
+          rows.push({ ...base, minUpgradePct, minAnalystCount, minUpside, exitOnDown });
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+async function runInSampleExplorationAsync(baseParams, endDate, onProgress) {
+  const start = '2023-01-01';
+  const seen = new Map();
+  const run = (p) => {
+    const k = candidateKey(p);
+    if (seen.has(k)) return seen.get(k);
+    const summary = runBacktest(p, start, endDate).summary;
+    const entry = { params: p, summary, value: rankValueExplorer(summary) };
+    seen.set(k, entry);
+    return entry;
+  };
+  const baseCands = buildExploreBaseCandidates(baseParams);
+  let done = 0;
+  const total = baseCands.length + 8 * 24;
+  const baseResults = [];
+  for (const p of baseCands) {
+    baseResults.push(run(p));
+    done++;
+    if (done % 8 === 0 && onProgress) { onProgress(done, total, '粗搜(144組結構參數)'); await new Promise(r => setTimeout(r, 0)); }
+  }
+  baseResults.sort((a, b) => b.value - a.value);
+  const seeds = baseResults.slice(0, 8);
+  for (let s = 0; s < seeds.length; s++) {
+    for (const p of refineExploreCandidates(seeds[s].params)) {
+      run(p);
+      done++;
+      if (done % 8 === 0 && onProgress) { onProgress(done, total, '細調(前8名各24組門檻)'); await new Promise(r => setTimeout(r, 0)); }
+    }
+  }
+  const ranked = [...seen.values()].sort((a, b) => b.value - a.value);
+  return { candidateCount: seen.size, best: ranked[0], top: ranked.slice(0, 10) };
+}
+
+document.getElementById('explore-search-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('explore-search-btn');
+  const base = readParams();
+  const end = document.getElementById('p-end').value;
+  const out = document.getElementById('explore-result');
+  btn.disabled = true;
+  renderSearchProgress(out, 0, 336, '搜尋中');
+  const result = await runInSampleExplorationAsync(base, end, (done, total, stage) => renderSearchProgress(out, done, total, stage));
+  btn.disabled = false;
+  out.innerHTML = '';
+  const tableHolder = document.createElement('div');
+  out.appendChild(tableHolder);
+  renderGridTable(tableHolder, result.top);
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'disclaimer-bar';
+  disclaimer.textContent = `已完成 ${result.candidateCount} 組不重複候選(144組粗搜取前8名，各再細調24組門檻)，結果為樣本內事後最佳，不代表可交易；點列表任一列可套用到左側參數面板重跑手動回測。`;
+  out.appendChild(disclaimer);
+  tableHolder.querySelectorAll('.grid-result-row').forEach((tr, i) => {
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', () => { applyParamsToForm(result.top[i].params); runAndRenderManual(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  });
+});
+
+// ============================================================================
+// 參數穩定度分析：固定目前左側面板的參數，逐一單獨變動6個參數，其餘維持不變，
+// 檢視超額報酬對每個參數的敏感度——鄰近設定落差越大代表目前設定越可能是局部尖峰。
+// ============================================================================
+const SENSITIVITY_SWEEPS = {
+  minUpgradePct: { label: '最低目標價調升幅度', unit: '%', anchors: [0, 1, 2, 3, 4, 5, 7, 10, 15], fmt: v => `${v}%` },
+  minAnalystCount: { label: '最低分析師數', unit: '位', anchors: [1, 2, 3, 4, 5, 7, 10], fmt: v => `${v}位` },
+  minUpside: { label: '目標價最低上漲空間', unit: '%', anchors: [0, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30], fmt: v => `${(v * 100).toFixed(0)}%` },
+  maxWeightPerStock: { label: '單檔最大權重', unit: '%', anchors: [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50], fmt: v => `${(v * 100).toFixed(0)}%` },
+  maxHoldDays: { label: '最長持有天數', unit: '交易日', anchors: [5, 10, 15, 20, 25, 30, 40, 60], fmt: v => `${v}日` },
+  maxPositions: { label: '最大持股數', unit: '檔', anchors: [1, 2, 3, 5, 8, 10, 15, 20, 0], fmt: v => v === 0 ? '不限' : `${v}檔` },
+};
+
+function buildSweepValues(key, currentValue) {
+  const anchors = SENSITIVITY_SWEEPS[key].anchors;
+  const vals = anchors.includes(currentValue) ? anchors.slice() : [...anchors, currentValue];
+  return [...new Set(vals)].sort((a, b) => a - b);
+}
+
+async function runSensitivityAnalysisAsync(baseParams, start, end, onProgress) {
+  const keys = Object.keys(SENSITIVITY_SWEEPS);
+  const totalRuns = keys.reduce((s, k) => s + buildSweepValues(k, baseParams[k]).length, 0);
+  let done = 0;
+  const baseRun = runBacktest(baseParams, start, end).summary;
+  const results = {};
+  for (const key of keys) {
+    const values = buildSweepValues(key, baseParams[key]);
+    const points = [];
+    for (const v of values) {
+      const p = { ...baseParams, [key]: v };
+      const r = runBacktest(p, start, end).summary;
+      points.push({ value: v, summary: r });
+      done++;
+      if (onProgress) onProgress(done, totalRuns);
+      await new Promise(res => setTimeout(res, 0));
+    }
+    results[key] = { baseValue: baseParams[key], points };
+  }
+  return { baseRun, results };
+}
+
+function sensitivityAnalyze(cfg) {
+  const pts = cfg.points;
+  const baseIdx = pts.findIndex(p => p.value === cfg.baseValue);
+  const values = pts.map(p => p.summary.excessReturnPct);
+  let leftDrop = 0, rightDrop = 0;
+  if (baseIdx > 0) leftDrop = pts[baseIdx].summary.excessReturnPct - pts[baseIdx - 1].summary.excessReturnPct;
+  if (baseIdx < pts.length - 1) rightDrop = pts[baseIdx].summary.excessReturnPct - pts[baseIdx + 1].summary.excessReturnPct;
+  const worstNeighborDrop = Math.max(leftDrop, rightDrop);
+  return { baseIdx, worstNeighborDrop };
+}
+
+function buildSensitivityChartSvg(key, cfg, an) {
+  const pts = cfg.points;
+  const fmt = SENSITIVITY_SWEEPS[key].fmt;
+  const W = 480, H = 230, padL = 50, padR = 16, padT = 30, padB = 32;
+  const yVals = pts.map(p => p.summary.excessReturnPct);
+  let yMin = Math.min(...yVals, 0), yMax = Math.max(...yVals, 0);
+  const pad = (yMax - yMin) * 0.14 || 5;
+  yMin -= pad; yMax += pad;
+  const x = i => padL + (i / Math.max(pts.length - 1, 1)) * (W - padL - padR);
+  const y = v => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+  const zeroY = y(0);
+
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar('--grid'), inkDim = cssVar('--ink-dim'), ink = cssVar('--ink'), upColor = cssVar('--up'), downColor = cssVar('--down'), accent = cssVar('--accent'), panelBg = cssVar('--panel'), panel2 = cssVar('--panel-2');
+
+  // 2026-07-29修正：原本只畫2-3條「均分」的格線，0%這條中軸剛好常常沒被畫到格線上，
+  // 只剩一條沒有數字的虛線，使用者完全看不出來那條線代表0%。改成：上下各挑一個乾淨的
+  // 格線(最高點/最低點附近)，中軸(0%)一定畫、一定標數字、字體加粗加大，跟其他格線
+  // 明顯不同，一眼就能認出「這條線=打平大盤」。軸線文字改用--ink-dim(不是--ink-faint)，
+  // 深色主題下--ink-faint太暗，X軸座標幾乎看不見。
+  let gridLines = '';
+  const topLabel = yMax, bottomLabel = yMin;
+  [topLabel, bottomLabel].forEach(gv => {
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W - padR}" y2="${gy.toFixed(1)}" stroke="${gridColor}" stroke-width="1"/>`;
+    gridLines += `<text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" font-size="10.5" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">${gv.toFixed(0)}%</text>`;
+  });
+  gridLines += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="${inkDim}" stroke-width="1.4" stroke-dasharray="4,3"/>`;
+  gridLines += `<rect x="${padL - 44}" y="${(zeroY - 8).toFixed(1)}" width="40" height="16" rx="4" fill="${panel2}"/>`;
+  gridLines += `<text x="${padL - 8}" y="${(zeroY + 3.5).toFixed(1)}" font-size="11" font-weight="700" fill="${inkDim}" text-anchor="end" font-family="ui-monospace,monospace">0%</text>`;
+
+  // 2026-07-29再修正：使用者指正——重點不是「哪裡變化劇烈」，中軸是超額報酬，真正
+  // 該回答的問題是「維持在哪個範圍內，超額報酬能保持正值(贏大盤)且穩定，這個安全範圍
+  // 的邊界節點在哪裡」，例如超額報酬本來是正的、突然劇烈轉負，那前一個節點就是「別超過
+  // 這裡」的邊界。改成：找出「超額報酬 ≥ 0%」的連續區間(優先取包含目前設定值的那一段，
+  // 沒有的話取最高分那一段)，把這個安全區間用底色highlight整段，邊界節點用箭頭+文字
+  // 明確標出「別低於/別超過多少」，而不是只標出斜率最大的那一小段。
+  const isGood = yVals.map(v => v >= 0);
+  function findRun(containingIdx) {
+    if (containingIdx != null) {
+      if (!isGood[containingIdx]) return null;
+      let s = containingIdx, e = containingIdx;
+      while (s > 0 && isGood[s - 1]) s--;
+      while (e < isGood.length - 1 && isGood[e + 1]) e++;
+      return { start: s, end: e };
+    }
+    let best = null, curStart = null;
+    for (let i = 0; i < isGood.length; i++) {
+      if (isGood[i] && curStart == null) curStart = i;
+      if ((!isGood[i] || i === isGood.length - 1) && curStart != null) {
+        const e = isGood[i] ? i : i - 1;
+        const avg = yVals.slice(curStart, e + 1).reduce((a, b) => a + b, 0) / (e - curStart + 1);
+        if (!best || avg > best.avg) best = { start: curStart, end: e, avg };
+        curStart = null;
+      }
+    }
+    return best;
+  }
+  const safeRun = findRun(an.baseIdx) || findRun(null);
+
+  const areaPath = `M${x(0).toFixed(1)},${zeroY.toFixed(1)} ` + pts.map((p, i) => `L${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ') + ` L${x(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`;
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.summary.excessReturnPct).toFixed(1)}`).join(' ');
+
+  // 2026-07-29再修正：使用者反饋邊界線上的文字說明太雜、看起來醜——保留虛線本身
+  // (夠清楚表達「這是安全區間邊界」)，拿掉「別低於/別超過」這些文字標籤；邊界的實際
+  // 數值本來就會顯示在X軸座標上，不用在圖表中間再重複標一次。
+  let safeZoneHtml = '';
+  if (safeRun) {
+    const zx1 = x(safeRun.start), zx2 = x(safeRun.end);
+    safeZoneHtml += `<rect x="${zx1.toFixed(1)}" y="${padT}" width="${(zx2 - zx1).toFixed(1)}" height="${H - padT - padB}" fill="${upColor}" opacity="0.16"/>`;
+    if (safeRun.start > 0) {
+      const bx = x(safeRun.start);
+      safeZoneHtml += `<line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>`;
+    }
+    if (safeRun.end < pts.length - 1) {
+      const bx = x(safeRun.end);
+      safeZoneHtml += `<line x1="${bx.toFixed(1)}" y1="${padT}" x2="${bx.toFixed(1)}" y2="${H - padB}" stroke="${downColor}" stroke-width="1.6" stroke-dasharray="3,2"/>`;
+    }
+  }
+
+  const xLabels = pts.map((p, i) => {
+    const isBase = i === an.baseIdx;
+    const isEdge = safeRun && (i === safeRun.start || i === safeRun.end) && (safeRun.start > 0 || safeRun.end < pts.length - 1) && (i === safeRun.start ? safeRun.start > 0 : safeRun.end < pts.length - 1);
+    const color = isBase ? accent : isEdge ? downColor : inkDim;
+    return `<text x="${x(i).toFixed(1)}" y="${H - padB + 16}" font-size="${isBase || isEdge ? 11 : 10}" font-weight="${isBase || isEdge ? 700 : 500}" fill="${color}" text-anchor="middle" font-family="ui-monospace,monospace">${fmt(p.value)}</text>`;
+  }).join('');
+
+  // 目前設定值除了圓點放大，額外加一條垂直參考線+「目前」標籤貼在圖表最上緣，
+  // 不是只靠一個小圓點孤零零地藏在線上，讓人一眼找不到「我現在在哪裡」。
+  const baseX = x(an.baseIdx);
+  const currentTag = `
+    <line x1="${baseX.toFixed(1)}" y1="${padT}" x2="${baseX.toFixed(1)}" y2="${H - padB}" stroke="${accent}" stroke-width="1" stroke-dasharray="2,3" opacity="0.55"/>
+    <rect x="${(baseX - 16).toFixed(1)}" y="${padT - 16}" width="32" height="14" rx="4" fill="${accent}"/>
+    <text x="${baseX.toFixed(1)}" y="${padT - 6}" font-size="9.5" font-weight="700" fill="${panelBg}" text-anchor="middle">目前</text>`;
+
+  const dots = pts.map((p, i) => {
+    const isBase = i === an.baseIdx;
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.summary.excessReturnPct).toFixed(1)}" r="${isBase ? 5.5 : 3}" fill="${isBase ? accent : panelBg}" stroke="${accent}" stroke-width="${isBase ? 2.2 : 1.6}"/>`;
+  }).join('');
+
+  const svgId = 'sv' + Math.random().toString(36).slice(2, 9);
+  return { svgId, html: `<svg class="chart" id="${svgId}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%; height:auto;">
+    <defs><clipPath id="${svgId}-pos"><rect x="0" y="0" width="${W}" height="${zeroY.toFixed(1)}"/></clipPath><clipPath id="${svgId}-neg"><rect x="0" y="${zeroY.toFixed(1)}" width="${W}" height="${(H - zeroY).toFixed(1)}"/></clipPath></defs>
+    ${gridLines}
+    <path d="${areaPath}" fill="${upColor}" opacity="0.20" clip-path="url(#${svgId}-pos)"/>
+    <path d="${areaPath}" fill="${downColor}" opacity="0.20" clip-path="url(#${svgId}-neg)"/>
+    ${safeZoneHtml}
+    <path d="${linePath}" fill="none" stroke="${accent}" stroke-width="2.2" stroke-linejoin="round"/>
+    ${dots}
+    ${currentTag}
+    ${xLabels}
+  </svg>` };
+}
+
+function renderSensitivityResult(container, baseRun, results) {
+  const ranked = Object.entries(results).map(([k, cfg]) => [k, sensitivityAnalyze(cfg)]).sort((a, b) => b[1].worstNeighborDrop - a[1].worstNeighborDrop);
+  const mostFragile = ranked[0], mostStable = ranked[ranked.length - 1];
+
+  const summaryHtml = `
+    <div class="sensitivity-summary">
+      <div class="sensitivity-summary-card">
+        <div class="hint">基準(目前設定)超額報酬</div>
+        <div class="mono" style="font-size:18px; font-weight:700; color:${baseRun.excessReturnPct >= 0 ? 'var(--up)' : 'var(--down)'};">${fmtPct(baseRun.excessReturnPct)}</div>
+      </div>
+      <div class="sensitivity-summary-card">
+        <div class="hint">最脆弱參數</div>
+        <div style="font-size:14px; font-weight:700;">${SENSITIVITY_SWEEPS[mostFragile[0]].label}</div>
+        <div class="hint" style="margin-top:2px;">鄰近設定落差 ${mostFragile[1].worstNeighborDrop.toFixed(0)}pp，可能是局部尖峰</div>
+      </div>
+      <div class="sensitivity-summary-card">
+        <div class="hint">最穩定參數</div>
+        <div style="font-size:14px; font-weight:700;">${SENSITIVITY_SWEEPS[mostStable[0]].label}</div>
+        <div class="hint" style="margin-top:2px;">鄰近設定落差僅 ${mostStable[1].worstNeighborDrop.toFixed(0)}pp</div>
+      </div>
+    </div>`;
+
+  const panelsHtml = Object.entries(results).map(([key, cfg]) => {
+    const an = sensitivityAnalyze(cfg);
+    const { html: chartHtml } = buildSensitivityChartSvg(key, cfg, an);
+    const flagClass = an.worstNeighborDrop > 40 ? 'flag-danger' : an.worstNeighborDrop > 15 ? 'flag-warn' : 'flag-ok';
+    const flagText = an.worstNeighborDrop > 40 ? `⚠ 高敏感度 ${an.worstNeighborDrop.toFixed(0)}pp` : an.worstNeighborDrop > 15 ? `中等敏感度 ${an.worstNeighborDrop.toFixed(0)}pp` : `穩定 ${an.worstNeighborDrop.toFixed(0)}pp`;
+    return `<div class="sensitivity-panel">
+      <div class="sensitivity-panel-head"><span style="font-size:13px; font-weight:700;">${SENSITIVITY_SWEEPS[key].label}</span><span class="sensitivity-flag ${flagClass}">${flagText}</span></div>
+      ${chartHtml}
+    </div>`;
+  }).join('');
+
+  // 2026-07-29新增：每張小圖都沒有圖例，橘點/虛線/粉綠底色代表什麼完全要用戶自己猜——
+  // 加一條固定在圖表上方的圖例，用文字(不是只靠顏色，紅綠對很多人來說不好分辨、
+  // 而且這個網站的紅=漲/綠=跌是台股慣例、跟國際慣例相反，不能假設看得懂)講清楚每個
+  // 視覺元素代表什麼。
+  const legendHtml = `
+    <div class="sensitivity-legend">
+      <span><span class="lg-dot" style="background:var(--accent);"></span>橘線＝超額報酬隨參數變化的軌跡</span>
+      <span><span class="lg-tag">目前</span>＝左側面板現在設定的值</span>
+      <span><span class="lg-swatch" style="background:var(--up); opacity:0.4;"></span>穩定安全區間（超額報酬持續 ≥ 0%）</span>
+      <span><span class="lg-line" style="border-top-color:var(--down);"></span>安全邊界＝超過/低於就開始輸大盤，別跨過這條線</span>
+      <span><span class="lg-line"></span>0% 中軸＝跟大盤打平的分界線</span>
+    </div>`;
+
+  container.innerHTML = `${summaryHtml}${legendHtml}<div class="sensitivity-grid">${panelsHtml}</div>
+    <div class="disclaimer-bar">綠色底色區間 = 超額報酬能維持贏過大盤(≥0%)的安全範圍，優先取「包含目前設定值」的那一段；紅色虛線是這個範圍的邊界節點，標明往哪個方向不能再移動。「鄰近設定落差」(右上角標籤) = 目前設定值往左右各移動一格後，超額報酬變動較大的那一側，數字越大代表過擬合風險越高，兩者可以互相對照看。</div>`;
+}
+
+document.getElementById('sensitivity-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('sensitivity-btn');
+  const base = readParams();
+  const start = document.getElementById('p-start').value;
+  const end = document.getElementById('p-end').value;
+  const out = document.getElementById('sensitivity-result');
+  btn.disabled = true;
+  renderSearchProgress(out, 0, 1, '分析中');
+  const { baseRun, results } = await runSensitivityAnalysisAsync(base, start, end, (done, total) => renderSearchProgress(out, done, total, '分析中'));
+  btn.disabled = false;
+  renderSensitivityResult(out, baseRun, results);
+});
+
+// ============================================================================
+// 啟動
+// ============================================================================
+(async function init() {
+  try {
+    await loadAll();
+    document.getElementById('loading-banner').style.display = 'none';
+    document.getElementById('main-content').style.display = '';
+    document.getElementById('composite-params').style.display = document.getElementById('p-sizing').value === 'composite' ? '' : 'none';
+    const { summary } = runAndRenderManual();
+    LAST_RUN_SUMMARY = summary;
+    // 2026-08-01修正：runStrictSearchAndRender()本身後來被改成「跑完就自動applyParamsToForm()
+    // 覆蓋表單」(對照函式內2026-07-29的註解)，等於這裡的呼叫其實違背了上面2026-07-28
+    // 那次修正的原意(表單預設值應該固定顯示同事審過的正式推薦參數，優化器只是輔助工具)。
+    // 這個矛盾這次才發現——2026-08-01把強制每日再平衡+證交稅一起測完，證實正式推薦參數
+    // (調升0%/分析師1位/上漲空間0%/5檔/單檔20%/持有10日/Enhanced)扣稅後超額報酬是正的
+    // (+38.78%)，比自動優化器現在(候選網格還沒重新針對稅務成本校準)選出來的組合更好、
+    // 更可信。改成頁面載入不再自動觸發搜尋，表單就乾淨顯示這組驗證過的推薦參數，優化器
+    // 變回純粹「使用者按了才跑」的輔助工具，不會回頭覆蓋這個已驗證的基準。
+  } catch (err) {
+    document.getElementById('loading-banner').style.display = 'none';
+    const banner = document.getElementById('error-banner');
+    banner.style.display = '';
+    banner.querySelector('.error-detail').textContent = String(err);
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>
