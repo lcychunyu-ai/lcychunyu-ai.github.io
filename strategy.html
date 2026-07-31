@@ -2572,6 +2572,12 @@ function buildOptimizerCandidates(baseParams) {
 // 寫死allocation∈['score','enhanced'])。這是我們自己的延伸搜尋，候選數變成384組
 // (3×2×2×4×2×4)，不再是跟同事192組完全對上的原始版本，所以獨立成另一個區塊，
 // 不動原本已經驗證過候選數精確吻合的「參數自動最佳化」。
+// 2026-08-01擴充(experiment分支)：把停損%／分批停利比例也納入搜尋網格，之前這兩個
+// 新參數固定沿用表單原值，優化器根本沒機會去比較「開/關/不同強度」的風控設定哪個
+// 好——這兩個已經是驗證過的有效槓桿(停損上線main，分批停利在experiment)，理應讓
+// 優化器一起搜，不是永遠鎖死同一個值。分批停利門檻固定70%(已驗證的甜蜜點)，只搜
+// 比例，避免網格再乘一個維度、運算量爆炸；3×3=9倍候選數(384→3456)，靠rolling
+// 二階段的24組shortlist篩選不受影響，運算量增加主要在第一輪快篩，仍在可接受範圍。
 function buildExtendedOptimizerCandidates(baseParams) {
   const rows = [];
   for (const minUpgradePct of [0, 3, 6]) {
@@ -2580,7 +2586,11 @@ function buildExtendedOptimizerCandidates(baseParams) {
         for (const sizingMode of ['equal', 'by_upgrade', 'composite', 'enhanced']) {
           for (const maxHoldDays of [10, 20]) {
             for (const maxPositions of [0, 5, 10, 20]) {
-              rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none' });
+              for (const stopLossPct of [0, 10, 20]) {
+                for (const partialTakeFraction of [0, 0.3, 0.5]) {
+                  rows.push({ ...baseParams, minUpgradePct, minAnalystCount, minUpside, sizingMode, maxHoldDays, maxPositions, maxWeightPerStock: 0.20, exitOnDown: true, exitOnTarget: true, avgRule: 'none', stopLossPct, partialTakeThresholdPct: 70, partialTakeFraction });
+                }
+              }
             }
           }
         }
