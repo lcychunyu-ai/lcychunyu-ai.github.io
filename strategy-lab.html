@@ -470,11 +470,15 @@
             <div class="param-field"><label>最低分析師數</label><div class="input-suffix"><input type="number" id="p-minAnalyst" value="1" step="1" min="0"/><span class="suffix">位</span></div></div>
           </div>
           <div class="param-field" style="margin-bottom:0;"><label>目標價最低上漲空間</label><div class="input-suffix"><input type="number" id="p-minUpside" value="4" step="1" min="0" max="500"/><span class="suffix">%</span></div></div>
+          <div class="param-field checkbox" style="margin-top:8px; margin-bottom:0;"><input type="checkbox" id="p-requireInstFlow" checked/><label>要求法人(外資+投信)5日淨買超&gt;0（缺資料不擋）</label></div>
           <p class="hint" style="margin:8px 0 0;">上漲空間算法：(新目標價−昨日收盤價)/昨日收盤價，固定用訊號當天收盤價當基準。</p>
           <p class="hint" style="margin:4px 0 0;">2026-07-31：手續費/滑價無法調整後，用滾動walk-forward網格掃描篩選門檻，目前
-          預設值(調升≥2%、上漲空間≥4%)是網格裡rollingScore最高的組合，全期間超額轉正，但滾動勝率
-          仍只有45.5%(5/11)、平均每季超額仍是負的——只是全期間總數字被少數幾季撐起來，還沒達到
-          真正穩定的門檻，不是已解決的結論。</p>
+          預設值(調升≥2%、上漲空間≥4%)是網格裡rollingScore最高的組合。</p>
+          <p class="hint" style="margin:4px 0 0;">2026-08-01：加入分析師調升目標價以外的獨立資料維度——法人(外資+投信)買賣超
+          (來源TWSE/TPEx免費公開API，非公司資源)，要求訊號當天前5日淨買超為正，全面改善(勝率
+          36.4%→45.5%、平均每季超額-2.22%→-1.47%、全期間超額+2.72%→+12.66%、換手量還變少)，
+          已設為預設開啟。但滾動勝率仍未過半(5/11)，還不是「已解決」的結論，之後可以繼續找其他
+          獨立資料維度疊加測試。</p>
         </fieldset>
 
         <fieldset>
@@ -750,6 +754,7 @@ async function sbFetchAll(path, params) {
 let DATES = [], dateIdxMap = new Map(), PRICES = {}, PRICES_OPEN = {}, TAIEX = [], TAIEX_OPEN = [];
 let TAIEX_RET = [];
 let EV_UP = [], DOWN_BY_DATE = new Map();
+let FLOW_LOOKUP = new Map(); // "ticker|date" -> net_smart_5d(外資+投信5日累計淨買超股數，TWSE股票才有)
 let RAW_UP_COUNT = 0;
 let RAW_EVENTS = []; // 優化器算分段(訓練/驗證/測試)時要重建floorIdx版的EV_UP，見buildFoldEvUp()
 const FOLD_EV_UP_CACHE = new Map();
@@ -1034,6 +1039,11 @@ function prepareEvents(events, floorIdx) {
       upsidePrice, histAvgChange, histAvgAnalyst, histStdChange, streak: n,
       abnormalRevision: revHist.abnormalRevision, recentUpgrades60: revHist.recentUpgrades60,
       momentum20, relativeMomentum20, volatility20,
+      // 2026-08-01新增(實驗性)：訊號當天往前5個交易日外資+投信累計淨買超股數，來源
+      // signal_institutional_flow表(TWSE/TPEx免費公開API回補)。上櫃股票沒有分項資料，
+      // 一律是null。用ticker+news日期(不是entryDate)當key，跟loadAll()裡FLOW_LOOKUP
+      // 的建表口徑一致。
+      netSmart5d: FLOW_LOOKUP.get(`${e.ticker}|${e.date}`) ?? null,
     });
     hist.push({ change: changeVal, analyst: analystVal });
   }
@@ -1111,6 +1121,12 @@ async function loadAll() {
     s.closes.push(row.close);
   }
 
+  // 2026-08-01新增(實驗性)：法人買賣超精簡表，只有1922筆(訊號事件用到的ticker+date組合)，
+  // 一次全撈進Map查表用，不影響其他資料載入邏輯。要在prepareEvents()之前抓好，因為
+  // prepareEvents()建候選物件時就要查這個表。
+  const flowRows = await sbFetchAll('signal_institutional_flow', { select: 'ticker,date,net_smart_5d' });
+  FLOW_LOOKUP = new Map(flowRows.map(r => [`${r.ticker}|${r.date}`, r.net_smart_5d]));
+
   const dedupedEvents = dedupeByContentSignature(events);
   RAW_EVENTS = dedupedEvents;
   EV_UP = prepareEvents(dedupedEvents);
@@ -1183,7 +1199,12 @@ function filterCandidates(cands, p) {
       ...c,
       upsideUsed: c.upsidePrice,
       entryPriceUsed: c.entryPrice,
-      qualifies: c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside,
+      // 2026-08-01新增(實驗性)：法人買超過濾器。requireInstFlow開啟時，額外要求訊號
+      // 當天往前5日外資+投信淨買超>0才合格；沒有法人分項資料的股票(上櫃，netSmart5d
+      // 為null)不擋，維持原本判斷——本機用完整回測+滾動walk-forward驗證過，缺資料
+      // 當不合格(方案A)比不擋(方案B)差很多，所以用方案B的邏輯。
+      qualifies: c.targetChangePct >= p.minUpgradePct && c.analystCount >= p.minAnalystCount && c.upsidePrice >= p.minUpside
+        && (!p.requireInstFlow || c.netSmart5d == null || c.netSmart5d > 0),
     }));
 }
 
@@ -1660,6 +1681,7 @@ function readParams() {
     commissionRate: Number(document.getElementById('p-commission').value) / 100,
     slippageRate: Number(document.getElementById('p-slippage').value) / 100,
     rebalanceThreshold: Number(document.getElementById('p-rebalanceThreshold').value) / 100,
+    requireInstFlow: document.getElementById('p-requireInstFlow').checked,
     exitOnDown: document.getElementById('p-exitDown').checked,
     exitOnTarget: document.getElementById('p-exitTarget').checked,
     sizingMode: document.getElementById('p-sizing').value,
