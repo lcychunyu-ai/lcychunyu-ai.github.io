@@ -4,7 +4,12 @@ on:
   schedule:
     # 每天台灣時間下午 15:00 (UTC 07:00)，台股13:30收盤後留緩衝時間讓yfinance資料更新
     - cron: "0 7 * * *"
-  workflow_dispatch: {}  # 允許手動觸發測試
+  workflow_dispatch:  # 允許手動觸發；days 可指定往前補抓幾天（排程停過時用來補缺口）
+    inputs:
+      days:
+        description: "往前抓幾天"
+        required: false
+        default: "10"
 
 jobs:
   update:
@@ -23,4 +28,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python3 update_stock_prices.py --days 10
+        run: python3 update_stock_prices.py --days ${{ github.event.inputs.days || '10' }}
