@@ -4,7 +4,12 @@ on:
   schedule:
     # 每天台灣時間早上7:00 (UTC 前一天 23:00)
     - cron: "0 23 * * *"
-  workflow_dispatch: {}  # 允許手動觸發測試
+  workflow_dispatch:  # 允許手動觸發；days 可指定往前補抓幾天（排程停過時用來補缺口）
+    inputs:
+      days:
+        description: "往前抓幾天"
+        required: false
+        default: "5"
 
 jobs:
   update:
@@ -23,4 +28,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python3 daily_update.py --days 5
+        run: python3 daily_update.py --days ${{ github.event.inputs.days || '5' }}
